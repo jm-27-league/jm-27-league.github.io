@@ -37,15 +37,46 @@ const TEAM_COLORS = {
   SEA: { primary: "#002244", secondary: "#69BE28" },
   SF:  { primary: "#AA0000", secondary: "#B3995D" },
   TB:  { primary: "#D50A0A", secondary: "#34302B" },
+  /* The Buccaneers in Brooklyn: EA relocated them at JM-27's 2026 offseason. */
+  BKN: { primary: "#D50A0A", secondary: "#34302B" },
   TEN: { primary: "#0C2340", secondary: "#4B92DB" },
   WAS: { primary: "#5A1414", secondary: "#FFB612" },
 };
 
-/* ESPN logo slugs, where they differ from lowercase EA abbr. */
-const LOGO_SLUGS = { AZ: "ari", WAS: "wsh" };
+/* ESPN logo slugs, where they differ from lowercase EA abbr. ESPN has no Brooklyn logo:
+   the relocated Bucs keep Tampa Bay's. */
+const LOGO_SLUGS = { AZ: "ari", WAS: "wsh", BKN: "tb" };
+
+/* Every franchise by its name, for an abbreviation this file has never heard of: EA's
+   relocations rename the city and abbreviation (Tampa Bay "TB" became Brooklyn "BKN",
+   still the Buccaneers), and the next one would otherwise render grey with a broken logo.
+   Both EA's displayName and its nickName ("Bucs") are tried. */
+const FRANCHISE_BY_NAME = {
+  cardinals: "AZ", falcons: "ATL", ravens: "BAL", bills: "BUF", panthers: "CAR", bears: "CHI",
+  bengals: "CIN", browns: "CLE", cowboys: "DAL", broncos: "DEN", lions: "DET", packers: "GB",
+  texans: "HOU", colts: "IND", jaguars: "JAX", jags: "JAX", chiefs: "KC", chargers: "LAC",
+  rams: "LAR", raiders: "LV", dolphins: "MIA", vikings: "MIN", patriots: "NE", pats: "NE",
+  saints: "NO", giants: "NYG", jets: "NYJ", eagles: "PHI", steelers: "PIT", seahawks: "SEA",
+  "49ers": "SF", niners: "SF", buccaneers: "TB", bucs: "TB", titans: "TEN", commanders: "WAS",
+};
+
+/* The abbreviation the palettes and logos know this team by: its own when known, else
+   its franchise's, found by name through the league's teams. Unknown stays as given. */
+function franchiseAbbr(abbr) {
+  if (TEAM_COLORS[abbr]) return abbr;
+  for (const t of teamIndex.values()) {
+    if (t.abbr !== abbr) continue;
+    for (const n of [t.name, t.nick]) {
+      const hit = FRANCHISE_BY_NAME[String(n || "").trim().toLowerCase()];
+      if (hit) return hit;
+    }
+  }
+  return abbr;
+}
 
 function logoUrl(abbr) {
-  const slug = LOGO_SLUGS[abbr] || abbr.toLowerCase();
+  const key = franchiseAbbr(abbr);
+  const slug = LOGO_SLUGS[key] || String(key).toLowerCase();
   return `https://a.espncdn.com/i/teamlogos/nfl/500/${slug}.png`;
 }
 
@@ -54,13 +85,13 @@ function portraitUrl(portraitId) {
 }
 
 function teamColor(abbr) {
-  return (TEAM_COLORS[abbr] || { primary: "#5c6b7d", secondary: "#93a1b3" }).primary;
+  return (TEAM_COLORS[franchiseAbbr(abbr)] || { primary: "#5c6b7d", secondary: "#93a1b3" }).primary;
 }
 
 /* A primary that's too dark to read as a rail on the dark theme gets its
    secondary instead (Bears navy, Raiders black, Texans navy...). */
 function railColor(abbr) {
-  const c = TEAM_COLORS[abbr];
+  const c = TEAM_COLORS[franchiseAbbr(abbr)];
   if (!c) return "#5c6b7d";
   return luminance(c.primary) < 0.05 ? c.secondary : c.primary;
 }
