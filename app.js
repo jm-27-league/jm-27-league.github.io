@@ -207,6 +207,28 @@ function fmtMoney(n) {
   return "$" + n;
 }
 
+// A roster player's contract as a real deal. EA's contractSalary and contractBonus
+// (exported as salary / bonus) are each the WHOLE deal's total, not per year — on
+// every 1-year deal capHit = salary + bonus exactly, and a team's salary column alone
+// sums to ~3x the cap. So the deal is salary + bonus, and per year is that over the
+// length (len). Same rule as the bot's lookup.ts contractTotal / contractPerYear.
+function dealTotal(p) {
+  return (Number(p && p.salary) || 0) + (Number(p && p.bonus) || 0);
+}
+function dealPerYear(p) {
+  const years = Number(p && p.len) || 0;
+  const total = dealTotal(p);
+  return years > 0 && total > 0 ? total / years : null;
+}
+// "10 yrs, $256.2M ($25.6M/yr)" — the Discord wording (lookup.ts dealSummary).
+function dealText(p) {
+  const years = Number(p && p.len) || 0;
+  const total = fmtMoney(dealTotal(p)) || "$0";
+  const perYear = fmtMoney(dealPerYear(p));
+  if (!years) return `${total} total`;
+  return `${years} yr${years === 1 ? "" : "s"}, ${total}` + (perYear ? ` (${perYear}/yr)` : "");
+}
+
 /**
  * The universal player card — a strategy sheet, not a headshot viewer: bio,
  * contract, dev, the season box-score line, position-relevant ratings (all 37
@@ -271,7 +293,7 @@ function openPlayerCard(id) {
 
   // Contract breakdown — rostered players only (EA zeroes free agents' asks until
   // the in-season negotiation window, so an FA "contract" would be fiction).
-  if (fmtMoney(p.salary)) {
+  if (fmtMoney(dealTotal(p))) {
     const sec = el("div", "pcard-sec");
     sec.appendChild(el("div", "need-depth-label", "Contract"));
     const row = (label, txt) => {
@@ -280,7 +302,7 @@ function openPlayerCard(id) {
       d.appendChild(document.createTextNode(" " + txt));
       return d;
     };
-    sec.appendChild(row("Deal", `${fmtMoney(p.salary)}/yr` + (fmtMoney(p.bonus) ? ` · ${fmtMoney(p.bonus)} bonus` : "")));
+    sec.appendChild(row("Deal", dealText(p) + (fmtMoney(p.bonus) ? ` · incl. ${fmtMoney(p.bonus)} bonus` : "")));
     if (p.len && p.yrsLeft != null) sec.appendChild(row("Term", `year ${Math.max(1, p.len - p.yrsLeft + 1)} of ${p.len} · ${p.yrsLeft} yr(s) left`));
     else if (p.yrsLeft != null) sec.appendChild(row("Term", `${p.yrsLeft} yr(s) left`));
     if (fmtMoney(p.capHit)) sec.appendChild(row("Cap hit", fmtMoney(p.capHit)));
@@ -2393,7 +2415,7 @@ function renderFreeAgents(view) {
       { key: "dev", label: "DEV", title: "Dev trait", sort: (p) => DEV_ORDER[p.dev] ?? -1 },
       { key: "ovr", label: "OVR", title: "Overall", sort: (p) => p.ovr },
       { key: "value", label: "VALUE", title: "Trade value", sort: (p) => p.value },
-      ...(upcoming ? [{ key: "sal", label: "SAL", title: "Current salary (EA hides re-sign asks until the negotiation window)", sort: (p) => p.salary ?? 0 }] : []),
+      ...(upcoming ? [{ key: "sal", label: "$/YR", title: "Current deal per year: (salary + bonus) ÷ years. EA hides re-sign asks until the negotiation window", sort: (p) => dealPerYear(p) ?? 0 }] : []),
       ...(faView.teamId ? [{ key: "fit", label: "FIT", title: "Fit for your roster (tap row for why)", sort: (p) => p.fit.score }] : []),
       ...ratingCols.map((k) => ({ key: k, label: k.toUpperCase(), title: RATING_NAMES[k], sort: (p) => (p.rat && p.rat[k] != null ? p.rat[k] : -1) })),
     ];
@@ -2445,7 +2467,7 @@ function renderFreeAgents(view) {
       tr.appendChild(devTd);
       tr.appendChild(el("td", "rt-num", String(p.ovr)));
       tr.appendChild(el("td", "rt-num", p.value.toLocaleString()));
-      if (upcoming) tr.appendChild(el("td", "rt-num", fmtMoney(p.salary) || "—"));
+      if (upcoming) tr.appendChild(el("td", "rt-num", fmtMoney(dealPerYear(p)) || "—"));
       if (faView.teamId) {
         const fitTd = el("td");
         fitTd.appendChild(el("span", "fit-badge fit-" + p.fit.verdict.toLowerCase().replace(/[^a-z]/g, ""), p.fit.verdict));
@@ -2478,7 +2500,7 @@ function renderFreeAgents(view) {
     });
     gridWrap.appendChild(colsBtn);
     gridWrap.appendChild(el("div", "news-disclaimer", upcoming
-      ? "Upcoming = final contract year, hitting the market next offseason unless re-signed. SAL is the CURRENT salary — EA doesn't reveal re-sign asks until the in-season negotiation window, so nothing here pretends to know the price. Fit scores them as next year's signing (YOURS = already on your roster: a re-sign call, not a target)."
+      ? "Upcoming = final contract year, hitting the market next offseason unless re-signed. $/YR is the current deal per year (salary + bonus over its length) — EA doesn't reveal re-sign asks until the in-season negotiation window, so nothing here pretends to know the price. Fit scores them as next year's signing (YOURS = already on your roster: a re-sign call, not a target)."
       : "Columns default to what scouts weigh for the position — sort by any of them, or open all 37. Fit is advisement (need + starter comparison + upside from real synced data); it never hides a player. EA's export has no personality, scheme, or formation data, so nothing here pretends to."));
     window.scrollTo(0, y);
   }
@@ -2598,7 +2620,7 @@ function renderPlayers(view) {
       { key: "dev", label: "DEV", title: "Dev trait", sort: (p) => DEV_ORDER[p.dev] ?? -1 },
       { key: "ovr", label: "OVR", title: "Overall", sort: (p) => p.ovr },
       { key: "value", label: "VALUE", title: "Trade value", sort: (p) => p.value },
-      { key: "sal", label: "SAL", title: "Salary", sort: (p) => p.salary ?? 0 },
+      { key: "sal", label: "$/YR", title: "Deal per year: (salary + bonus) ÷ years", sort: (p) => dealPerYear(p) ?? 0 },
       ...ratingCols.map((k) => ({ key: k, label: k.toUpperCase(), title: RATING_NAMES[k], sort: (p) => (p.rat && p.rat[k] != null ? p.rat[k] : -1) })),
     ];
 
@@ -2647,7 +2669,7 @@ function renderPlayers(view) {
       tr.appendChild(devTd);
       tr.appendChild(el("td", "rt-num", String(p.ovr)));
       tr.appendChild(el("td", "rt-num", p.value.toLocaleString()));
-      tr.appendChild(el("td", "rt-num", fmtMoney(p.salary) || "—"));
+      tr.appendChild(el("td", "rt-num", fmtMoney(dealPerYear(p)) || "—"));
       for (const k of ratingCols) {
         const v = p.rat && p.rat[k] != null ? p.rat[k] : null;
         const cls = v == null ? "rt-num" : v >= 90 ? "rt-num rt-hi" : v >= 80 ? "rt-num rt-good" : v < 70 ? "rt-num rt-low" : "rt-num";
