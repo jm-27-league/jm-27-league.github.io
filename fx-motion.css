@@ -173,7 +173,9 @@
   .wordmark-the, .wordmark-main { animation: fx-mast-text 420ms var(--fx-snap) 140ms both; }
   .wordmark-main { animation-delay: 190ms; }
   .week-chip { animation: fx-chip-in 380ms var(--fx-out) 300ms both; }
+  .wordmark-crest { animation: fx-crest-in 460ms var(--fx-snap) 80ms both; }
 }
+@keyframes fx-crest-in { from { opacity: 0; transform: scale(.7) rotate(-8deg); } }
 @keyframes fx-mast-wipe {
   from { clip-path: polygon(0 0, 22px 0, 0 100%, 0 100%); }
   to { clip-path: polygon(0 0, 100% 0, calc(100% - 22px) 100%, 0 100%); }
@@ -184,6 +186,6 @@
 /* Belt and braces: whatever else asks for motion, reduced motion gets none of it here. */
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
-  .fx-ring::before, .hero > .fx-glow, .wordmark, .wordmark-the, .wordmark-main, .week-chip { animation: none; }
+  .fx-ring::before, .hero > .fx-glow, .wordmark, .wordmark-the, .wordmark-main, .week-chip, .wordmark-crest { animation: none; }
   .scorechip { transition: none; }
 }

@@ -4320,6 +4320,23 @@ if (typeof window.addEventListener === "function") {
   });
 }
 
+/* The league's crest beside the wordmark. The shell is shared and ships no crest — a
+   league's comes from its site-overrides (logo/crest-120.png) — so the image is only put
+   in the masthead once it has actually loaded: a league without one shows no broken icon. */
+function mountCrest(doc, ImageCtor, src) {
+  if (!doc || typeof ImageCtor !== "function") return null;
+  const img = new ImageCtor();
+  img.className = "wordmark-crest";
+  img.alt = "";
+  img.decoding = "async";
+  img.onload = () => {
+    const wordmark = doc.querySelector(".wordmark");
+    if (wordmark && !wordmark.querySelector(".wordmark-crest")) wordmark.insertBefore(img, wordmark.firstChild);
+  };
+  img.src = src;
+  return img;
+}
+
 /* This shell is shared source — the bot copies site/ into EVERY league's repo — so
    the masthead can't name a league. site.json carries leagueName; index.html's own
    text is the fallback, which is what an older cached site.json still renders. */
@@ -4355,6 +4372,7 @@ async function load() {
   teamIndex.clear();
   for (const t of DATA.teams || []) teamIndex.set(t.teamId, t);
   applyBranding(DATA.leagueName);
+  try { mountCrest(document, typeof Image === "function" ? Image : null, "logo/crest-120.png"); } catch {}
   document.getElementById("week-chip").textContent = DATA.weekLabel || "—";
   routeFromHash();
   render();

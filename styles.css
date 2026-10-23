@@ -88,7 +88,7 @@ body::after {
    runs inside the red block only, where it actually reads. */
 .wordmark {
   position: relative;
-  display: flex; flex-direction: column; justify-content: center;
+  display: flex; flex-direction: row; align-items: center; gap: 10px;
   line-height: 1;
   padding: calc(12px + env(safe-area-inset-top)) 38px 11px 16px;
   background: linear-gradient(160deg, #e6141b 0%, var(--red) 60%, #a50408 100%);
@@ -107,6 +107,14 @@ body::after {
   0%, 55% { transform: translateX(-130%); }
   75%, 100% { transform: translateX(130%); }
 }
+.wordmark-text { display: flex; flex-direction: column; justify-content: center; }
+/* The league's crest, from its site-overrides (logo/crest-120.png). The shared shell ships
+   none, so app.js adds this only once the image has loaded: no crest, no broken icon. */
+.wordmark-crest {
+  height: 40px; width: auto; flex: none;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.45));
+}
+@media (min-width: 900px) { .wordmark-crest { height: 44px; } }
 .wordmark-the {
   font-family: "Archivo", sans-serif; font-style: italic;
   font-size: 10px; font-weight: 800; letter-spacing: .32em;
