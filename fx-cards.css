@@ -1,0 +1,290 @@
+/* fx-cards — the player card's broadcast face and the draft class reveal.
+   Loaded after styles.css and built on its language: the dark broadcast art of the
+   hero / billboard, Archivo italic numbers, team colors arriving inline from app.js
+   (--fx-c1 primary, --fx-c2 secondary, --fx-rail the readable rail color).
+   Motion personality: quick, confident, ease-out; overshoot only on the "pop"
+   moments (the card landing on desktop, the OVR medallion, an elite pick's badge).
+   Only transform / opacity / filter animate. Every animation lives inside the
+   no-preference block at the bottom, so reduced motion gets the finished state. */
+
+/* ---------- Player card: the hero ---------- */
+.fx-card { --fx-finish: rgba(255, 255, 255, .5); }
+.fx-card.fx-dev-xfactor { --fx-finish: #ff3b3f; }
+.fx-card.fx-dev-superstar { --fx-finish: #e8b84b; }
+.fx-card.fx-dev-star { --fx-finish: #cfd6de; }
+
+.fx-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  margin: -18px -16px 0;
+  padding: 22px 16px 20px;
+  background: #0b0f14;
+  color: #fff;
+}
+/* The dev finish's frame: a hairline inside the hero's edge. Normal has none. */
+.fx-dev-xfactor .fx-hero,
+.fx-dev-superstar .fx-hero,
+.fx-dev-star .fx-hero { box-shadow: inset 0 0 0 1.5px var(--fx-finish), inset 0 -26px 40px -30px var(--fx-finish); }
+
+.fx-hero-bg, .fx-hero-vig, .fx-foil, .fx-mark-wrap, .fx-spec {
+  position: absolute;
+  pointer-events: none;
+}
+.fx-hero-bg, .fx-hero-vig, .fx-foil { inset: 0; }
+/* Team-color ground with depth: a lit pool behind the headshot, the secondary
+   bleeding in from the far corner, the site's yard-line hatching on top. */
+.fx-hero-bg {
+  background:
+    repeating-linear-gradient(115deg, transparent 0 22px, rgba(255, 255, 255, .04) 22px 24px),
+    radial-gradient(90% 120% at 16% 38%, rgba(255, 255, 255, .16), transparent 62%),
+    linear-gradient(125deg, var(--fx-c1, #2a313b) 0%, var(--fx-c1, #2a313b) 46%, var(--fx-c2, #5c6b7d) 135%);
+}
+/* The logo as a big faint watermark, off the right edge. */
+.fx-mark-wrap {
+  top: 50%; right: -46px;
+  width: 220px; height: 220px;
+  margin-top: -110px;
+}
+.fx-hero-mark {
+  display: block;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  opacity: .2;
+  transform: rotate(-10deg);
+}
+.fx-hero-mark-fa {
+  font-family: "Archivo", sans-serif; font-style: italic; font-weight: 900; font-stretch: 75%;
+  font-size: 150px; line-height: 220px; text-align: center;
+  color: #fff; opacity: .07;
+}
+/* Soft vignette plus a scrim under the text side, so white type holds on every team. */
+.fx-hero-vig {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .3), transparent 72%),
+    radial-gradient(140% 110% at 28% 34%, transparent 42%, rgba(0, 0, 0, .5) 100%),
+    linear-gradient(180deg, transparent 55%, rgba(0, 0, 0, .32));
+}
+/* Bright primaries (Steelers / Saints gold, Bengals / Broncos orange, Dolphins aqua). */
+.fx-hero-light .fx-hero-vig {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .56), rgba(0, 0, 0, .22) 80%),
+    radial-gradient(140% 110% at 28% 34%, transparent 42%, rgba(0, 0, 0, .5) 100%);
+}
+
+/* Dev finishes. The sweeps sit off-card until animated, so a still card shows only the frame. */
+.fx-foil { overflow: hidden; z-index: 1; }
+.fx-foil::before {
+  content: "";
+  position: absolute;
+  top: -40%; bottom: -40%;
+}
+.fx-dev-xfactor .fx-foil::before {
+  left: -100%; width: 300%;
+  background: repeating-linear-gradient(115deg,
+    rgba(255, 70, 120, 0) 0%, rgba(255, 70, 120, .26) 6%, rgba(255, 214, 90, .26) 12%,
+    rgba(80, 255, 196, .26) 18%, rgba(80, 156, 255, .26) 24%, rgba(204, 96, 255, .26) 30%, rgba(255, 70, 120, 0) 36%);
+  mix-blend-mode: screen;
+}
+.fx-dev-superstar .fx-foil::before,
+.fx-dev-star .fx-foil::before {
+  left: 0; width: 55%;
+  background: linear-gradient(105deg, transparent 20%, rgba(255, 216, 120, .34) 50%, transparent 80%);
+  transform: translateX(-130%);
+}
+.fx-dev-star .fx-foil::before { background: linear-gradient(105deg, transparent 25%, rgba(236, 242, 250, .3) 50%, transparent 75%); }
+
+/* The specular glint that follows a fine pointer (app.js moves it; only shown while tilting). */
+.fx-spec {
+  left: 0; top: 0;
+  width: 260px; height: 260px;
+  border-radius: 50%;
+  z-index: 1;
+  background: radial-gradient(circle, rgba(255, 255, 255, .26), rgba(255, 255, 255, 0) 62%);
+  opacity: 0;
+  transition: opacity .25s ease-out;
+}
+.fx-spec-on .fx-spec { opacity: 1; }
+
+/* The head sits over every layer. */
+.fx-hero .pcard-head { position: relative; z-index: 2; }
+.fx-av-wrap { position: relative; flex: none; }
+.fx-card .pcard-av {
+  width: 88px; height: 88px; font-size: 26px;
+  border: 3px solid rgba(255, 255, 255, .92);
+  background: radial-gradient(circle at 50% 32%, rgba(255, 255, 255, .3), rgba(255, 255, 255, .06) 72%);
+  box-shadow: 0 0 0 5px rgba(255, 255, 255, .08), 0 12px 28px rgba(0, 0, 0, .45);
+}
+.fx-card .pcard-av.initials { background: var(--ring, #2a313b); }
+/* The OVR medallion: dark glass rimmed in the dev finish, white numerals, always legible. */
+.fx-ovr {
+  position: absolute; right: -12px; bottom: -6px;
+  display: flex; flex-direction: column; align-items: center;
+  min-width: 42px;
+  padding: 3px 6px 3px;
+  border-radius: 8px;
+  background: rgba(8, 10, 14, .86);
+  border: 1.5px solid var(--fx-finish);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .45);
+  line-height: 1;
+}
+.fx-ovr-num {
+  font-family: "Archivo", sans-serif; font-style: italic; font-weight: 900;
+  font-size: 21px; font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+.fx-ovr-label {
+  font-family: "Archivo", sans-serif; font-weight: 800;
+  font-size: 7.5px; letter-spacing: .2em; margin-top: 2px;
+  color: rgba(255, 255, 255, .72);
+}
+.fx-hero .pcard-name { color: #fff; text-shadow: 0 2px 10px rgba(0, 0, 0, .5); font-size: 24px; }
+.fx-hero .pcard-sub { color: rgba(255, 255, 255, .86); text-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
+.fx-hero .pcard-team { color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
+.fx-hero .pcard-fa-pill { color: #fff; border-color: rgba(255, 255, 255, .8); }
+/* Dev badges keep the site's hues, lifted for the dark ground. */
+.fx-hero .dev-badge { background: rgba(255, 255, 255, .16); color: #fff; text-shadow: none; }
+.fx-hero .dev-badge.dev-star { background: rgba(232, 184, 75, .24); color: #ffe39a; }
+.fx-hero .dev-badge.dev-superstar { background: rgba(150, 110, 240, .32); color: #e2d6ff; }
+.fx-hero .dev-badge.dev-xfactor { background: #d00a10; color: #fff; }
+
+.fx-card .pcard-close {
+  z-index: 3;
+  background: rgba(8, 10, 14, .42);
+  border-color: rgba(255, 255, 255, .3);
+  color: #fff;
+}
+.fx-card .pcard-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* Rating bars under each number, in the team's rail color (green at 90+, faded under 70). */
+.fx-rat-bar {
+  height: 3px;
+  margin: 5px 8px 0;
+  border-radius: 2px;
+  background: var(--edge);
+  overflow: hidden;
+}
+.fx-rat-fill {
+  height: 100%;
+  background: var(--fx-rail, var(--red));
+  transform-origin: left center;
+  transform: scaleX(var(--v, 0));
+}
+.fx-rat-bar.hi .fx-rat-fill { background: #0a7a2f; }
+.fx-rat-bar.low .fx-rat-fill { opacity: .4; }
+
+@media (min-width: 700px) {
+  .fx-hero { padding: 26px 22px 24px; margin: -18px -16px 0; }
+  .fx-card .pcard-av { width: 104px; height: 104px; font-size: 30px; }
+  .fx-hero .pcard-name { font-size: 27px; }
+  .fx-mark-wrap { width: 260px; height: 260px; margin-top: -130px; right: -40px; }
+  .fx-hero-mark-fa { font-size: 180px; line-height: 260px; }
+}
+
+/* ---------- Draft class ---------- */
+/* inline-block so an elite pick's badge can scale; it looks identical either way. */
+.draft-class .dev-badge { display: inline-block; }
+/* Skip floats at the bottom right (above the phone's tab bar) so showing and removing it
+   never moves the table. Above the tab bar (z 30), under the player card (z 60). */
+.fx-skip {
+  position: fixed; z-index: 31;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  padding: 9px 16px; font-size: 12.5px;
+  box-shadow: 0 6px 22px rgba(16, 21, 27, .22);
+}
+@media (min-width: 900px) {
+  .fx-skip { bottom: calc(24px + env(safe-area-inset-bottom)); }
+}
+
+/* ---------- Motion (none of it under reduced motion) ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  /* The card arrives: the scrim fades, a phone's sheet slides up, a desktop card pops. */
+  .fx-ov { animation: fx-ov-in .22s ease-out backwards; }
+  .fx-ov.fx-leaving { animation: fx-ov-out .19s ease-in forwards; pointer-events: none; }
+  .fx-card { animation: fx-sheet-in .38s cubic-bezier(.16, 1, .3, 1) backwards; }
+  .fx-leaving .fx-card { animation: fx-sheet-out .19s ease-in forwards; }
+  @media (min-width: 700px) {
+    .fx-card { animation: fx-card-in .4s cubic-bezier(.34, 1.32, .64, 1) backwards; }
+    .fx-leaving .fx-card { animation: fx-card-out .19s ease-in forwards; }
+  }
+
+  /* Parallax on the way in: the watermark drifts in from the right as the headshot
+     rises toward the viewer, then the medallion pops and the name slides in. */
+  .fx-hero-mark { animation: fx-mark-in .7s cubic-bezier(.16, 1, .3, 1) .04s backwards; }
+  .fx-card .pcard-av { animation: fx-av-in .48s cubic-bezier(.34, 1.45, .64, 1) .08s backwards; }
+  .fx-ovr { animation: fx-pop .42s cubic-bezier(.34, 1.56, .64, 1) .22s backwards; }
+  .fx-hero .pcard-who > * { animation: fx-slide-in .36s cubic-bezier(.16, 1, .3, 1) backwards; }
+  .fx-hero .pcard-who > :nth-child(1) { animation-delay: .1s; }
+  .fx-hero .pcard-who > :nth-child(2) { animation-delay: .15s; }
+  .fx-hero .pcard-who > :nth-child(3) { animation-delay: .2s; }
+  .fx-card > .pcard-chips, .fx-card > .pcard-sec, .fx-card > .pcard-teambtn {
+    animation: fx-rise .34s cubic-bezier(.16, 1, .3, 1) .3s backwards;
+  }
+  .fx-card > :nth-child(3) { animation-delay: .16s; }
+  .fx-card > :nth-child(4) { animation-delay: .2s; }
+  .fx-card > :nth-child(5) { animation-delay: .24s; }
+  .fx-card > :nth-child(6) { animation-delay: .28s; }
+
+  /* Dev finishes in motion. */
+  .fx-dev-xfactor .fx-foil::before { animation: fx-holo 6s linear infinite alternate; }
+  .fx-dev-superstar .fx-foil::before { animation: fx-sheen 4.8s cubic-bezier(.45, 0, .25, 1) .5s infinite; }
+  .fx-dev-star .fx-foil::before { animation: fx-sheen 7.5s cubic-bezier(.45, 0, .25, 1) .6s infinite; }
+
+  /* Tilt: quick while following, a softer settle when the pointer leaves. */
+  .fx-card.fx-tilt { transition: transform .14s ease-out; }
+  .fx-card.fx-tilt.fx-tilt-rest { transition-duration: .45s; }
+  .fx-mark-wrap, .fx-av-wrap { transition: transform .14s ease-out; }
+
+  .fx-rat-fill { animation: fx-fill .55s cubic-bezier(.16, 1, .3, 1) backwards; animation-delay: calc(.24s + var(--i, 0) * 22ms); }
+
+  /* Draft reveal: each pick flips down like a broadcast board card, in pick order. */
+  .fx-revealing .fx-flip {
+    transform-origin: 50% 0;
+    animation: fx-flip-in .42s cubic-bezier(.2, .8, .3, 1.12) var(--fx-d, 0ms) backwards;
+  }
+  .fx-revealing .fx-elite .dev-badge {
+    position: relative; overflow: hidden;
+    animation: fx-badge-pop .56s cubic-bezier(.34, 1.56, .64, 1) calc(var(--fx-d, 0ms) + .3s) backwards;
+  }
+  .fx-revealing .fx-elite-xfactor .dev-badge { --fx-glow: rgba(226, 19, 27, .85); }
+  .fx-revealing .fx-elite-superstar .dev-badge { --fx-glow: rgba(123, 79, 208, .85); }
+  .fx-revealing .fx-elite .dev-badge::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(105deg, transparent 25%, rgba(255, 255, 255, .9) 50%, transparent 75%);
+    transform: translateX(-130%);
+    animation: fx-badge-sweep .6s ease-out calc(var(--fx-d, 0ms) + .42s) both;
+  }
+  .fx-revealing .fx-elite-xfactor .dev-badge::after {
+    background: linear-gradient(105deg, transparent 15%, rgba(255, 90, 140, .7) 32%, rgba(255, 220, 110, .8) 44%, rgba(110, 255, 205, .8) 56%, rgba(120, 170, 255, .7) 68%, transparent 85%);
+  }
+  .fx-skip { animation: fx-ov-in .2s ease-out backwards; }
+}
+
+@keyframes fx-ov-in { from { opacity: 0; } }
+@keyframes fx-ov-out { to { opacity: 0; } }
+@keyframes fx-sheet-in { 0% { opacity: 0; transform: translateY(56px); } 40% { opacity: 1; } 100% { transform: none; } }
+@keyframes fx-sheet-out { to { opacity: 0; transform: translateY(44px); } }
+@keyframes fx-card-in { 0% { opacity: 0; transform: translateY(14px) scale(.9); } 45% { opacity: 1; } 100% { transform: none; } }
+@keyframes fx-card-out { to { opacity: 0; transform: scale(.95); } }
+@keyframes fx-mark-in { from { opacity: 0; transform: translateX(34px) rotate(-3deg) scale(1.12); } }
+@keyframes fx-av-in { from { opacity: 0; transform: translateY(10px) scale(.82); } }
+@keyframes fx-pop { from { opacity: 0; transform: scale(.4); } }
+@keyframes fx-slide-in { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes fx-rise { from { opacity: 0; transform: translateY(8px); } }
+@keyframes fx-holo { from { transform: translateX(0); } to { transform: translateX(33.333%); } }
+@keyframes fx-sheen { 0% { transform: translateX(-130%); } 45%, 100% { transform: translateX(260%); } }
+@keyframes fx-fill { from { transform: scaleX(0); } }
+@keyframes fx-flip-in {
+  0% { opacity: 0; transform: perspective(900px) rotateX(-84deg); }
+  55% { opacity: 1; }
+  100% { transform: none; }
+}
+@keyframes fx-badge-pop {
+  0% { opacity: 0; transform: scale(.5); filter: brightness(1.6) drop-shadow(0 0 0 var(--fx-glow, transparent)); }
+  30% { opacity: 1; }
+  50% { transform: scale(1.25); filter: brightness(1.3) drop-shadow(0 0 7px var(--fx-glow, transparent)); }
+  100% { transform: none; filter: brightness(1) drop-shadow(0 0 0 transparent); }
+}
+@keyframes fx-badge-sweep { to { transform: translateX(130%); } }

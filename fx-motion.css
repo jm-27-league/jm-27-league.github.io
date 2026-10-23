@@ -1,0 +1,189 @@
+/* Motion for the chrome and page changes: page transitions, the score ticker, the GOTW
+   glow, the masthead's entrance. Loaded after styles.css and built on its tokens and
+   team colors; app.js's "Motion" section drives the parts that need script.
+
+   One motion voice: quick, confident, broadcast. Page changes run 180-440ms on ease-out
+   curves; only the logos landing in a morph get a touch of overshoot. Only transform,
+   opacity and clip-path move. Everything sits behind prefers-reduced-motion:
+   no-preference, so a member who asks for less motion gets the still site, content
+   shown at once. */
+
+:root {
+  --fx-out: cubic-bezier(.2, .8, .2, 1);      /* the house ease-out */
+  --fx-snap: cubic-bezier(.16, 1, .3, 1);     /* fast start, long settle: things arriving */
+  --fx-exit: cubic-bezier(.4, 0, 1, 1);       /* things leaving */
+  --fx-pop: cubic-bezier(.34, 1.36, .5, 1);   /* a little overshoot, for logos landing */
+}
+
+/* ---------- Page transitions (View Transitions API) ----------
+   app.js sets html[data-fx-nav] for the length of a transition:
+     fwd / back  a tab change, sliding the way the tab bar reads
+     open        a team / game page / Draft HQ opening over its tab
+     close       that page closing again (Back, the browser's back, its tab)
+   and html[data-fx-morph] (team | game) while a tapped logo or card morphs into the
+   opened page's header: fx-hero is the card / header, fx-logo-a / -b its logos. */
+@media (prefers-reduced-motion: no-preference) {
+  /* The bars hold still while the page under them changes; the tab highlight crossfades. */
+  html[data-fx-nav] .topbar { view-transition-name: fx-topbar; }
+  html[data-fx-nav] .tabbar { view-transition-name: fx-tabbar; }
+  ::view-transition-group(fx-topbar), ::view-transition-group(fx-tabbar) { animation-duration: 220ms; }
+
+  /* The page's own "rise" entrance would play inside the transition's new frame and
+     double the motion. A zero duration finishes it at once (and, unlike `none`, doesn't
+     replay it when the attribute comes off). */
+  html[data-fx-nav] .view > * { animation-duration: 0s; }
+
+  /* Tabs: the old page leaves the way you're heading, the new one arrives from the other side. */
+  html[data-fx-nav="fwd"]::view-transition-old(root) { animation: fx-leave-left 180ms var(--fx-exit) both; }
+  html[data-fx-nav="fwd"]::view-transition-new(root) { animation: fx-enter-right 300ms var(--fx-snap) both; }
+  html[data-fx-nav="back"]::view-transition-old(root) { animation: fx-leave-right 180ms var(--fx-exit) both; }
+  html[data-fx-nav="back"]::view-transition-new(root) { animation: fx-enter-left 300ms var(--fx-snap) both; }
+
+  /* A page opening over its tab comes up toward you; closing settles back. */
+  html[data-fx-nav="open"]::view-transition-old(root) { animation: fx-recede 200ms var(--fx-exit) both; }
+  html[data-fx-nav="open"]::view-transition-new(root) { animation: fx-come-up 340ms var(--fx-snap) both; }
+  html[data-fx-nav="close"]::view-transition-old(root) { animation: fx-drop-away 200ms var(--fx-exit) both; }
+  html[data-fx-nav="close"]::view-transition-new(root) { animation: fx-step-forward 320ms var(--fx-snap) both; }
+
+  /* The morph: the tapped card grows into the page header (clipped to its rounded box,
+     so the header unfolds out of the card), the logos fly to their new places and land. */
+  ::view-transition-group(fx-hero) {
+    animation-duration: 400ms;
+    animation-timing-function: var(--fx-out);
+    overflow: clip;
+    border-radius: var(--radius);
+  }
+  ::view-transition-old(fx-hero) { animation: fx-fade-out 170ms var(--fx-exit) both; }
+  ::view-transition-new(fx-hero) { animation: fx-fade-in 280ms var(--fx-out) 50ms both; }
+  ::view-transition-group(fx-logo-a), ::view-transition-group(fx-logo-b) {
+    animation-duration: 440ms;
+    animation-timing-function: var(--fx-pop);
+  }
+  /* The second logo leaves a beat later, like a broadcast graphic building in. */
+  ::view-transition-group(fx-logo-b) { animation-delay: 30ms; }
+}
+
+@keyframes fx-leave-left { to { opacity: 0; transform: translateX(-28px); } }
+@keyframes fx-leave-right { to { opacity: 0; transform: translateX(28px); } }
+@keyframes fx-enter-right { from { opacity: 0; transform: translateX(36px); } }
+@keyframes fx-enter-left { from { opacity: 0; transform: translateX(-36px); } }
+@keyframes fx-recede { to { opacity: 0; transform: scale(.975); } }
+@keyframes fx-come-up { from { opacity: 0; transform: translateY(14px); } }
+@keyframes fx-drop-away { to { opacity: 0; transform: translateY(14px); } }
+@keyframes fx-step-forward { from { opacity: 0; transform: scale(.975); } }
+@keyframes fx-fade-out { to { opacity: 0; } }
+@keyframes fx-fade-in { from { opacity: 0; } }
+
+/* ---------- Score strip: the stadium ticker ----------
+   app.js adds .fx-ticking only when the chips overflow the screen. The edges fade like
+   a ribbon board running behind the bezel; hand scrolling still works. */
+.scorestrip.fx-ticking {
+  scroll-behavior: auto;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+}
+/* Inset, so the strip's own overflow never clips the focus ring. */
+.scorechip:focus-visible { outline: 2px solid var(--red-bright); outline-offset: -2px; }
+@media (hover: hover) and (pointer: fine) {
+  .scorechip { transition: border-color .15s ease, transform .18s var(--fx-out); }
+  .scorechip:hover { border-color: #b9c0c8; transform: translateY(-1px); }
+}
+
+/* ---------- GOTW glow ----------
+   app.js puts a .fx-glow layer in the GOTW billboard (and any further GOTW card): a
+   ribbon of light in the two teams' colors running round the edge, over a soft halo
+   of those colors from the top corners. The ribbon only touches the 3px band inside
+   the border, so it never sits over text; the halo sits under the content. */
+.fx-glow {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Team colors lifted toward white so they read as LIGHT, even a navy or a brown on
+     its own dark half of the billboard. Browsers without color-mix get the raw color. */
+  --fx-away-lit: var(--bb-away, var(--gold-bright));
+  --fx-home-lit: var(--bb-home, var(--gold-bright));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .fx-glow {
+    --fx-away-lit: color-mix(in srgb, var(--bb-away, var(--gold-bright)) 45%, #fff);
+    --fx-home-lit: color-mix(in srgb, var(--bb-home, var(--gold-bright)) 45%, #fff);
+  }
+}
+.hero > .fx-glow {
+  position: absolute; z-index: 0; /* beats styles.css's .hero > *:not(.wm) { position: relative } */
+  background:
+    radial-gradient(50% 70% at 0% 0%, var(--fx-away-lit), transparent 70%),
+    radial-gradient(50% 70% at 100% 0%, var(--fx-home-lit), transparent 70%);
+  mix-blend-mode: screen;
+  opacity: .26;
+}
+.card.gotw > .fx-glow { z-index: 2; }
+.fx-ring {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  padding: 3px;
+  overflow: hidden;
+  /* The ring's own box, for the comet layer to size itself from (both sides, not just
+     the width: an expanded GOTW card is far taller than it is wide). */
+  container-type: size;
+  /* Keep only the padding band: everything inside the content box is masked away. */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+/* Two comets chasing round the edge, one per team: a tail in the team's color and a
+   white-hot head, like lights running on a ribbon board. */
+.fx-ring::before {
+  content: "";
+  position: absolute; left: 50%; top: 50%;
+  /* It turns, so it must cover the box's corners at every angle: a square at least as wide
+     as the box's diagonal. Older browsers keep the width-only size. */
+  width: 160%;
+  width: calc(1.5 * max(100cqw, 100cqh));
+  width: calc(hypot(100cqw, 100cqh) + 12px); /* cq units read the content box; the ring has 3px padding */
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  background: conic-gradient(
+    transparent 0 2%,
+    var(--fx-away-lit) 11%,
+    #fff 16%,
+    transparent 16.6% 52%,
+    var(--fx-home-lit) 61%,
+    #fff 66%,
+    transparent 66.6% 100%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fx-ring::before { animation: fx-ribbon 7s linear infinite; }
+  .hero > .fx-glow { animation: fx-halo 4.2s ease-in-out infinite alternate; }
+}
+@keyframes fx-ribbon {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+@keyframes fx-halo {
+  from { opacity: .2; }
+  to { opacity: .42; }
+}
+
+/* ---------- Masthead entrance (first load only) ----------
+   The red slash wipes in from the left on its own diagonal, the league name slides in
+   behind it, the week chip settles last. Plays once: these elements are never re-made. */
+@media (prefers-reduced-motion: no-preference) {
+  .wordmark { animation: fx-mast-wipe 520ms var(--fx-out) both; }
+  .wordmark-the, .wordmark-main { animation: fx-mast-text 420ms var(--fx-snap) 140ms both; }
+  .wordmark-main { animation-delay: 190ms; }
+  .week-chip { animation: fx-chip-in 380ms var(--fx-out) 300ms both; }
+}
+@keyframes fx-mast-wipe {
+  from { clip-path: polygon(0 0, 22px 0, 0 100%, 0 100%); }
+  to { clip-path: polygon(0 0, 100% 0, calc(100% - 22px) 100%, 0 100%); }
+}
+@keyframes fx-mast-text { from { opacity: 0; transform: translateX(-12px); } }
+@keyframes fx-chip-in { from { opacity: 0; transform: translateX(10px); } }
+
+/* Belt and braces: whatever else asks for motion, reduced motion gets none of it here. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  .fx-ring::before, .hero > .fx-glow, .wordmark, .wordmark-the, .wordmark-main, .week-chip { animation: none; }
+  .scorechip { transition: none; }
+}

@@ -229,6 +229,126 @@ function dealText(p) {
   return `${years} yr${years === 1 ? "" : "s"}, ${total}` + (perYear ? ` (${perYear}/yr)` : "");
 }
 
+/* ---------- FX: the player card's broadcast face (fx-cards.css) ----------
+   Motion is an extra, never a gate: every number is in the DOM at its final value
+   first, and with reduced motion, no matchMedia or no timers the card just appears. */
+
+const FX_DEV_KEYS = ["xfactor", "superstar", "star", "normal"];
+const FX_TILT_MAX = 8; // degrees, at the card's edge
+const FX_CARD_LEAVE_MS = 190;
+const FX_COUNT_MS = 650;
+const FX_COUNT_DELAY_MS = 140;
+
+// EA's dev trait ("X-Factor", "Superstar", "Star", "Normal") as the finish it gets.
+function fxDevKey(dev) {
+  const k = String(dev || "").toLowerCase().replace(/[^a-z]/g, "");
+  return FX_DEV_KEYS.includes(k) ? k : "normal";
+}
+function fxMedia(query) {
+  try { return typeof window !== "undefined" && typeof window.matchMedia === "function" && Boolean(window.matchMedia(query).matches); } catch { return false; }
+}
+// Motion only when the browser can say the viewer hasn't asked for less, and has timers.
+function fxMotionOK() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  if (typeof setTimeout !== "function") return false;
+  return !fxMedia("(prefers-reduced-motion: reduce)");
+}
+function fxFinePointer() { return fxMedia("(hover: hover) and (pointer: fine)"); }
+function fxNow() { return typeof performance !== "undefined" && performance && typeof performance.now === "function" ? performance.now() : Date.now(); }
+
+/* The hero's layers, back to front: the team-color ground, the logo watermark, a
+   vignette, the dev finish, the moving specular. All decorative, all aria-hidden. */
+function fxCardHero(card, p, t) {
+  const pal = t ? TEAM_COLORS[franchiseAbbr(t.abbr)] : null;
+  const c1 = pal ? pal.primary : "#2a313b";
+  const c2 = pal ? pal.secondary : "#5c6b7d";
+  card.style.setProperty("--fx-c1", c1);
+  card.style.setProperty("--fx-c2", c2);
+  card.style.setProperty("--fx-rail", t ? railColor(t.abbr) : "#5c6b7d");
+  const hero = el("div", "fx-hero" + (luminance(c1) > 0.42 ? " fx-hero-light" : ""));
+  const layer = (cls) => { const d = el("div", cls); d.setAttribute("aria-hidden", "true"); hero.appendChild(d); return d; };
+  layer("fx-hero-bg");
+  const mark = layer("fx-mark-wrap");
+  if (t) {
+    const img = logoImg(t.abbr, "fx-hero-mark");
+    img.alt = "";
+    mark.appendChild(img);
+  } else {
+    mark.appendChild(el("span", "fx-hero-mark fx-hero-mark-fa", "FA"));
+  }
+  layer("fx-hero-vig");
+  if (fxDevKey(p.dev) !== "normal") layer("fx-foil");
+  const spec = layer("fx-spec");
+  card.appendChild(hero);
+  return { hero, mark, spec };
+}
+
+// A rating's bar under its number: scaled to the value, filling in with a short stagger.
+function fxRatingBar(v, i) {
+  const bar = el("div", "fx-rat-bar" + (v >= 90 ? " hi" : v < 70 ? " low" : ""));
+  bar.setAttribute("aria-hidden", "true");
+  const fill = el("div", "fx-rat-fill");
+  fill.style.setProperty("--v", String(Math.max(0, Math.min(99, Number(v) || 0)) / 100));
+  fill.style.setProperty("--i", String(Math.min(i, 14)));
+  bar.appendChild(fill);
+  return bar;
+}
+
+/* The OVR counts up once, ease-out, and always lands on the exact value. The final
+   number is written first, so a page without animation frames simply shows it. */
+function fxCountUp(node, to) {
+  const final = String(to);
+  node.textContent = final;
+  const n = Number(to);
+  if (!fxMotionOK() || typeof requestAnimationFrame !== "function" || !Number.isFinite(n) || n <= 0 || n !== Math.round(n)) return;
+  const t0 = fxNow() + FX_COUNT_DELAY_MS;
+  node.textContent = "0";
+  const step = () => {
+    const k = Math.max(0, Math.min(1, (fxNow() - t0) / FX_COUNT_MS));
+    if (k >= 1 || !node.isConnected) { node.textContent = final; return; }
+    node.textContent = String(Math.min(n, Math.round(n * (1 - Math.pow(1 - k, 3)))));
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/* Depth: the watermark drifts against the card's scroll (every device), and on a
+   hover-capable fine pointer the whole card tilts toward the cursor (FX_TILT_MAX at the
+   edge) with a specular glint following it. Touch never tilts. */
+function fxCardMotion(card, fx) {
+  if (!fxMotionOK() || typeof requestAnimationFrame !== "function") return;
+  let tx = 0, ty = 0, sy = 0, queued = false;
+  const tilt = fxFinePointer();
+  const paint = () => {
+    queued = false;
+    if (tilt) card.style.transform = tx || ty ? `perspective(1100px) rotateX(${(-ty * FX_TILT_MAX).toFixed(2)}deg) rotateY(${(tx * FX_TILT_MAX).toFixed(2)}deg)` : "";
+    fx.mark.style.transform = `translate3d(${(-tx * 12).toFixed(1)}px, ${(sy * 0.35 - ty * 10).toFixed(1)}px, 0)`;
+    fx.av.style.transform = tx || ty ? `translate3d(${(tx * 5).toFixed(1)}px, ${(ty * 4).toFixed(1)}px, 0)` : "";
+  };
+  const queue = () => { if (!queued) { queued = true; requestAnimationFrame(paint); } };
+  card.addEventListener("scroll", () => { sy = Math.min(240, Math.max(0, card.scrollTop || 0)); queue(); }, { passive: true });
+  if (!tilt) return;
+  card.classList.add("fx-tilt");
+  card.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "touch") return;
+    const r = card.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    tx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
+    ty = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1));
+    const h = fx.hero.getBoundingClientRect();
+    fx.spec.style.transform = `translate3d(${(e.clientX - h.left - 130).toFixed(0)}px, ${(e.clientY - h.top - 130).toFixed(0)}px, 0)`;
+    card.classList.remove("fx-tilt-rest");
+    card.classList.add("fx-spec-on");
+    queue();
+  });
+  card.addEventListener("pointerleave", () => {
+    tx = 0; ty = 0;
+    card.classList.add("fx-tilt-rest");
+    card.classList.remove("fx-spec-on");
+    queue();
+  });
+}
+
 /**
  * The universal player card — a strategy sheet, not a headshot viewer: bio,
  * contract, dev, the season box-score line, position-relevant ratings (all 37
@@ -243,25 +363,71 @@ function openPlayerCard(id) {
   const { p, teamId } = hit;
   const t = teamId != null ? team(teamId) : null;
 
-  const ov = el("div", "pcard-ov");
-  const close = () => {
-    ov.remove();
+  const ov = el("div", "pcard-ov fx-ov");
+  const motion = fxMotionOK();
+  // Whatever had focus (a tappable row, a roster name) gets it back when the card closes.
+  const opener = document.activeElement;
+  let closed = false;
+  // Leaves the way it came in (a quick scale / fade), then goes; with no motion it just goes.
+  // { instant: true } skips the exit, for a close that navigates straight away (the team
+  // button): a card still fading would be caught in the page transition's snapshot.
+  const close = (opts) => {
+    if (closed) return;
+    closed = true;
     document.removeEventListener("keydown", onKey);
     document.body.style.overflow = "";
+    if (opener && opener !== document.body && opener.isConnected && typeof opener.focus === "function") {
+      try { opener.focus({ preventScroll: true }); } catch {}
+    }
+    if (!motion || (opts && opts.instant === true)) { ov.remove(); return; }
+    ov.classList.add("fx-leaving");
+    setTimeout(() => ov.remove(), FX_CARD_LEAVE_MS);
   };
-  const onKey = (e) => { if (e.key === "Escape") close(); };
+  // Escape closes; Tab and Shift+Tab stay inside the card (it is modal).
+  const onKey = (e) => {
+    if (e.key === "Escape") { close(); return; }
+    if (e.key !== "Tab" || typeof card.querySelectorAll !== "function") return;
+    const stops = [...card.querySelectorAll("button, a[href], [tabindex]:not([tabindex='-1'])")];
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    const at = document.activeElement;
+    const inside = typeof card.contains === "function" && card.contains(at);
+    if (e.shiftKey ? (at === first || !inside) : (at === last || !inside)) {
+      if (typeof e.preventDefault === "function") e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
+  };
   document.addEventListener("keydown", onKey);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
 
-  const card = el("div", "pcard");
+  const dev = fxDevKey(p.dev);
+  const card = el("div", "pcard fx-card fx-dev-" + dev);
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.setAttribute("aria-label", p.name);
   const x = el("button", "pcard-close", "✕");
   x.type = "button";
   x.setAttribute("aria-label", "Close");
   x.addEventListener("click", close);
   card.appendChild(x);
 
+  // The broadcast face: the team's colors with depth, its logo as a faint watermark,
+  // the headshot as the hero, the dev trait's finish over it, the OVR as a medallion.
+  const { hero, mark, spec } = fxCardHero(card, p, t);
   const head = el("div", "pcard-head");
-  head.appendChild(avatar({ name: p.name, teamId: teamId ?? -1, portraitId: p.portraitId }, "pcard-av"));
+  const avWrap = el("div", "fx-av-wrap");
+  avWrap.appendChild(avatar({ name: p.name, teamId: teamId ?? -1, portraitId: p.portraitId }, "pcard-av"));
+  // role=img so the label is read (a plain div's aria-label isn't); the counting digits
+  // inside are presentational, the label always says the exact value.
+  const medal = el("div", "fx-ovr");
+  medal.setAttribute("role", "img");
+  medal.setAttribute("aria-label", `${p.ovr} overall`);
+  const ovrNum = el("span", "fx-ovr-num", String(p.ovr));
+  ovrNum.setAttribute("aria-hidden", "true");
+  medal.appendChild(ovrNum);
+  medal.appendChild(el("span", "fx-ovr-label", "OVR"));
+  avWrap.appendChild(medal);
+  head.appendChild(avWrap);
   const who = el("div", "pcard-who");
   who.appendChild(el("div", "pcard-name display", p.name));
   const devBadge = el("span", "dev-badge dev-" + (p.dev || "Normal").toLowerCase().replace(/[^a-z]/g, ""), p.dev || "—");
@@ -277,7 +443,7 @@ function openPlayerCard(id) {
   }
   who.appendChild(teamLine);
   head.appendChild(who);
-  card.appendChild(head);
+  hero.appendChild(head);
 
   const chips = el("div", "team-chips pcard-chips");
   const chip = (label, value) => {
@@ -286,10 +452,10 @@ function openPlayerCard(id) {
     d.appendChild(el("div", "team-chip-label", label));
     return d;
   };
-  chips.appendChild(chip("OVR", p.ovr));
+  // OVR rides on the hero's medallion; the chips carry the rest.
   if (p.value != null) chips.appendChild(chip("Trade value", p.value.toLocaleString()));
   if (p.inj) chips.appendChild(chip("🩹 Out", p.inj + " wks"));
-  card.appendChild(chips);
+  if (chips.children.length) card.appendChild(chips);
 
   // Contract breakdown — rostered players only (EA zeroes free agents' asks until
   // the in-season negotiation window, so an FA "contract" would be fiction).
@@ -356,6 +522,7 @@ function openPlayerCard(id) {
       const keys = showAllR
         ? Object.keys(p.rat).sort((a, b) => p.rat[b] - p.rat[a])
         : (GROUP_RATING_COLS[group] || GROUP_RATING_COLS[""]);
+      let n = 0;
       for (const k of keys) {
         const v = p.rat[k];
         if (v == null) continue;
@@ -363,6 +530,7 @@ function openPlayerCard(id) {
         cell.title = RATING_NAMES[k] || k;
         cell.appendChild(el("div", "pcard-rat-val" + (v >= 90 ? " hi" : v >= 80 ? " good" : v < 70 ? " low" : ""), String(v)));
         cell.appendChild(el("div", "pcard-rat-key", k.toUpperCase()));
+        cell.appendChild(fxRatingBar(v, n++));
         grid.appendChild(cell);
       }
     };
@@ -379,13 +547,16 @@ function openPlayerCard(id) {
   if (t) {
     const btn = el("button", "trade-cta pcard-teambtn", `View ${t.nick} team page →`);
     btn.type = "button";
-    btn.addEventListener("click", () => { close(); if (viewTeamId !== teamId) openTeam(teamId); });
+    btn.addEventListener("click", () => { close({ instant: true }); if (viewTeamId !== teamId) openTeam(teamId); });
     card.appendChild(btn);
   }
 
   ov.appendChild(card);
   document.body.appendChild(ov);
   document.body.style.overflow = "hidden";
+  fxCountUp(ovrNum, p.ovr);
+  fxCardMotion(card, { hero, mark, spec, av: avWrap });
+  if (typeof x.focus === "function") { try { x.focus({ preventScroll: true }); } catch {} }
 }
 
 /* ---------- Box scores — lazy box.json, shared by game cards / week browser / team game logs ---------- */
@@ -616,6 +787,9 @@ function gameCard(g) {
   const away = team(g.awayTeamId), home = team(g.homeTeamId);
 
   if (g.isGotw) {
+    card.style.setProperty("--bb-away", railColor(away.abbr));
+    card.style.setProperty("--bb-home", railColor(home.abbr));
+    card.appendChild(fxGlow());
     const eyebrow = el("div", "gotw-eyebrow");
     eyebrow.appendChild(svgIcon("M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 14.3 7.2 16.9l.9-5.4L4.2 7.7l5.4-.8z"));
     eyebrow.appendChild(document.createTextNode("Game of the Week"));
@@ -677,6 +851,7 @@ function gameCard(g) {
 function gameLink(scheduleId, cls, text) {
   const a = el("a", cls, text);
   a.href = "#game-" + scheduleId;
+  a.setAttribute("data-fx-game", String(scheduleId)); // lets back / forward find the link a game page morphed from
   a.addEventListener("click", (e) => {
     e.stopPropagation();
     if (e.preventDefault) e.preventDefault();
@@ -702,7 +877,142 @@ function matchupOf(s) {
   return s.n != null ? s.n : DATA.matchups.teamCount;
 }
 
+/* ---------- Game page motion (styles in fx-game.css) ----------
+   The page opens like a pregame graphic: the two color fields wipe in from opposite
+   sides, each logo rides in with its color, the AT (or the final score) pops at the
+   seam, the records and meta land last. Below it, the comparison bars grow and the
+   chips and notes rise as each card scrolls into view. Every effect is a class or a
+   data-fx attribute the CSS animates FROM; the element's own state is the final one,
+   so without the CSS, without IntersectionObserver, or under reduced motion the page
+   is simply there. Numbers are never animated: only bars, which carry no text. */
+const FX_EDGE_SCALE = 15; // a 15-point rating gap fills one side of a unit-edge bar
+const fxGameSeen = new Set(); // games whose full intro already played this session
+let fxGameObserver = null;
+
+/* Is the other builder's card-to-hero morph carrying this page in? Its page changes mark
+   <html data-fx-morph="game"> for exactly that, and each new change sets or clears the
+   mark, so a tab cross-fade or a close still running when a game is tapped is not a
+   morph. Then the morph IS the entrance: the hero skips its slide-in and plays only the
+   small AT / meta beats. One marker, read the same way in every browser; no marker (no
+   view transitions, or a plain one) means the hero plays its own intro. */
+function fxGameMorphing() {
+  try {
+    return document.documentElement.getAttribute("data-fx-morph") === "game";
+  } catch { return false; } // no root element (or a page that won't say): no morph
+}
+
+function fxReducedMotion() {
+  try {
+    return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  } catch { return true; }
+}
+
+/* How this render of the game page enters. "full" the first time a game opens this
+   session, "short" on a later visit, "morph" when the card-to-hero morph is carrying
+   the page in, "none" under reduced motion or when the same page re-renders in place.
+   reveal: whether the below-the-hero cascade is armed (it needs IntersectionObserver). */
+function fxGameIntro(scheduleId) {
+  if (fxGameObserver) { try { fxGameObserver.disconnect(); } catch {} fxGameObserver = null; }
+  const sameView = lastRenderedTab === "game-" + scheduleId;
+  if (fxReducedMotion() || sameView) return { hero: "none", reveal: false };
+  const hero = fxGameMorphing() ? "morph" : fxGameSeen.has(scheduleId) ? "short" : "full";
+  fxGameSeen.add(scheduleId);
+  return { hero, reveal: typeof IntersectionObserver === "function" };
+}
+
+/* A stat's league standing as a bar length: 1st of 32 fills it, 32nd of 32 is a sliver.
+   Null for a style number (run rate) that has no rank. */
+function fxRankShare(s) {
+  if (!s || s.r == null) return null;
+  const n = matchupOf(s);
+  if (!(n > 0)) return null;
+  return Math.max(0, Math.min(1, (n - s.r + 1) / n));
+}
+function fxBar(share, color, cls) {
+  const bar = el("i", "fx-bar" + (cls ? " " + cls : ""));
+  bar.style.setProperty("--fx-w", String(Math.round(share * 10000) / 10000));
+  bar.style.setProperty("--fx-c", color);
+  return bar;
+}
+/* Tale-of-the-tape bars under a tendency row, growing out from the middle: the away
+   side's league standing to the left, the home side's to the right, in team colors.
+   The side with the better rank stays full strength, the other steps back. */
+function fxCompareBar(a, b, away, home, betterA) {
+  const sa = fxRankShare(a), sb = fxRankShare(b);
+  if (sa == null && sb == null) return null;
+  const wrap = el("div", "fx-cmp");
+  wrap.setAttribute("aria-hidden", "true");
+  for (const [share, t, side, lead] of [[sa, away, "away", betterA !== false], [sb, home, "home", betterA !== true]]) {
+    const half = el("span", "fx-cmp-side " + side);
+    if (share != null) half.appendChild(fxBar(share, railColor(t.abbr), lead ? "" : "trail"));
+    wrap.appendChild(half);
+  }
+  return wrap;
+}
+/* A unit edge as a bar from the middle toward whoever holds it: offense to the left,
+   defense to the right, in that team's color; an even unit stays neutral. */
+function fxEdgeBar(e, off, def) {
+  const diff = typeof e.diff === "number" ? e.diff : e.off - e.def;
+  const wrap = el("div", "fx-edge");
+  wrap.setAttribute("aria-hidden", "true");
+  const share = Math.min(Math.abs(diff) / FX_EDGE_SCALE, 1);
+  for (const side of ["off", "def"]) {
+    const half = el("span", "fx-edge-side " + side);
+    const holds = side === "off" ? diff > 0 : diff < 0;
+    if (holds) half.appendChild(fxBar(share, e.edge === "even" ? "var(--text-faint)" : railColor((side === "off" ? off : def).abbr), e.edge === "even" ? "even" : ""));
+    wrap.appendChild(half);
+  }
+  return wrap;
+}
+/* Number a card's rows for the cascade (CSS delays by --fx-i), capped so a long card
+   never waits on its tail. Only direct children with one of the classes count. */
+function fxStagger(card, classes) {
+  let i = 0;
+  for (const child of Array.from(card.children || [])) {
+    if (!classes.some((c) => child.classList.contains(c))) continue;
+    child.classList.add("fx-item");
+    child.style.setProperty("--fx-i", String(Math.min(i++, 12)));
+  }
+}
+/* Arm the cascade: each card waits hidden-at-zero until it scrolls into view, then
+   plays once (unobserved on the first hit). Arming happens only after the observer
+   exists, so a browser without one never hides anything. */
+function fxGameReveal(cards) {
+  let io;
+  try {
+    io = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add("fx-in");
+        io.unobserve(entry.target);
+      }
+    }, { rootMargin: "0px 0px -12% 0px", threshold: 0 });
+  } catch { return; }
+  fxGameObserver = io;
+  for (const { card, items } of cards) {
+    fxStagger(card, items);
+    card.classList.add("fx-reveal");
+    io.observe(card);
+  }
+}
+
+/* What sits at the seam of the game page's header: AT before kickoff, the score once
+   it's played (the winner's number bright, the loser's stepped back). */
+function heroMiddle(g) {
+  if (!g.played) return el("div", "hero-vs", "AT");
+  // Screen readers get one sentence from a visually hidden line; the big digits they
+  // would otherwise read as "17", "dash", "24" are hidden from them.
+  const mid = el("div", "hero-vs hero-score");
+  mid.appendChild(el("span", "hs-sr", `Final score ${g.awayScore} to ${g.homeScore}`));
+  const digit = (cls, t) => { const n = el("span", cls, t); n.setAttribute("aria-hidden", "true"); return n; };
+  mid.appendChild(digit("hs-num" + (g.awayScore < g.homeScore ? " lost" : ""), String(g.awayScore)));
+  mid.appendChild(digit("hs-dash", "–"));
+  mid.appendChild(digit("hs-num" + (g.homeScore < g.awayScore ? " lost" : ""), String(g.homeScore)));
+  return mid;
+}
+
 function renderGame(view, scheduleId) {
+  const fx = fxGameIntro(scheduleId);
   const back = el("button", "team-back", "← Back");
   back.type = "button";
   back.addEventListener("click", () => closeGame(false));
@@ -728,6 +1038,14 @@ function renderGame(view, scheduleId) {
   const hero = el("div", "hero game-hero" + (g.isGotw ? "" : " plain"));
   hero.style.setProperty("--bb-away", railColor(away.abbr));
   hero.style.setProperty("--bb-home", railColor(home.abbr));
+  if (fx.hero !== "none") hero.setAttribute("data-fx", fx.hero);
+  // The two color fields and the slash between them: drawn art, so the intro can
+  // slide them in; at rest they paint the same split the billboard always had.
+  for (const cls of ["fx-field away", "fx-field home", "fx-seam"]) {
+    const layer = el("div", cls);
+    layer.setAttribute("aria-hidden", "true");
+    hero.appendChild(layer);
+  }
   hero.appendChild(logoImg(away.abbr, "wm wm-away"));
   hero.appendChild(logoImg(home.abbr, "wm wm-home"));
   const eyebrow = el("div", "hero-eyebrow");
@@ -744,7 +1062,7 @@ function renderGame(view, scheduleId) {
     name.appendChild(el("span", "hero-rec", record(t.teamId) || t.abbr));
     block.appendChild(name);
     face.appendChild(block);
-    if (side === "away") face.appendChild(el("div", "hero-vs", "AT"));
+    if (side === "away") face.appendChild(heroMiddle(g));
   }
   hero.appendChild(face);
   const meta = el("div", "hero-meta");
@@ -821,11 +1139,15 @@ function renderGame(view, scheduleId) {
     for (const def of rows) {
       const a = M.away.stats[def.key], b = M.home.stats[def.key];
       const betterA = a && b && a.r != null && b.r != null && a.r !== b.r ? a.r < b.r : null;
-      tend.appendChild(tapeRow(def.label, statCell(def, a), statCell(def, b), betterA));
+      const row = tapeRow(def.label, statCell(def, a), statCell(def, b), betterA);
+      const bar = fxCompareBar(a, b, away, home, betterA);
+      if (bar) row.appendChild(bar);
+      tend.appendChild(row);
     }
   }
   view.appendChild(sectionHead("Tendencies", `Season to date · ranks of ${DATA.matchups.teamCount}, 1st is best`));
   view.appendChild(tend);
+  const revealCards = [{ card: tend, items: ["tape-row"] }];
 
   // Strengths and weaknesses: the league's best and worst quarter, per side.
   const swGrid = el("div", "grid game-sides");
@@ -849,6 +1171,7 @@ function renderGame(view, scheduleId) {
       }
     }
     swGrid.appendChild(card);
+    revealCards.push({ card, items: ["gs-row", "gs-none"] });
   }
   view.appendChild(sectionHead("Strengths & Weaknesses", "League top and bottom quarter"));
   view.appendChild(swGrid);
@@ -861,6 +1184,7 @@ function renderGame(view, scheduleId) {
       clash.appendChild(row);
     }
     view.appendChild(clash);
+    revealCards.push({ card: clash, items: ["plan-note"] });
   }
 
   // Unit edges from roster ratings, each offense against the defense it faces.
@@ -886,9 +1210,11 @@ function renderGame(view, scheduleId) {
         const gap = Math.abs(e.diff).toFixed(1);
         row.appendChild(el("span", "chip " + (e.edge === "off" ? "edge-up" : e.edge === "def" ? "edge-down" : "edge-even"),
           e.edge === "off" ? `Edge ${off.abbr} +${gap}` : e.edge === "def" ? `Edge ${def.abbr} +${gap}` : "Even"));
+        row.appendChild(fxEdgeBar(e, off, def));
         card.appendChild(row);
       }
       view.appendChild(card);
+      revealCards.push({ card, items: ["edge-row"] });
     }
   }
 
@@ -919,6 +1245,7 @@ function renderGame(view, scheduleId) {
       }
     }
     planGrid.appendChild(card);
+    revealCards.push({ card, items: ["plan-note", "gs-none"] });
   }
   view.appendChild(planGrid);
 
@@ -928,6 +1255,8 @@ function renderGame(view, scheduleId) {
     box.appendChild(boxScorePanel(g.scheduleId, DATA.week?.stage ?? null, DATA.week?.week ?? null));
     view.appendChild(box);
   }
+
+  if (fx.reveal) fxGameReveal(revealCards);
 
   view.appendChild(el("div", "news-disclaimer", "Built from this season's box scores, standings and roster ratings. EA's export has no play-by-play, formation, coverage or personnel data, so nothing here is about schemes or play calls. Unit edges use healthy starters, picked by OVR."));
 }
@@ -939,23 +1268,34 @@ function renderGame(view, scheduleId) {
 function scoreStrip(games) {
   const strip = el("div", "scorestrip");
   const ordered = games.slice().sort((a, b) => Number(b.played) - Number(a.played));
-  for (const g of ordered) {
-    const away = team(g.awayTeamId), home = team(g.homeTeamId);
-    // Each chip opens its game page; the game channel link lives on that page.
-    const chip = gameLink(g.scheduleId, "scorechip");
-    const decided = g.played;
-    for (const [t, score, won] of [[away, g.awayScore, decided && g.awayScore > g.homeScore], [home, g.homeScore, decided && g.homeScore > g.awayScore]]) {
-      const row = el("div", "sc-row" + (decided && !won ? " loser" : ""));
-      row.appendChild(logoImg(t.abbr, "sc-logo"));
-      row.appendChild(el("span", null, t.abbr));
-      row.appendChild(el("span", "sc-score", decided ? String(score) : record(t.teamId)));
-      chip.appendChild(row);
-    }
-    const status = g.isGotw ? "★ GOTW" : g.forced === "forceWin" ? "Force Win" : g.forced === "fairSim" ? "Fair Sim" : g.played ? "Final" : "Scheduled";
-    chip.appendChild(el("div", "sc-status" + (g.isGotw ? " gotw" : g.played ? " final" : ""), status));
-    strip.appendChild(chip);
-  }
+  for (const g of ordered) strip.appendChild(scoreChip(g));
+  // A strip wider than the screen glides like a stadium ticker (fxTickerStart). The loop
+  // needs a second copy of the chips: hidden from screen readers and the tab order, so
+  // keyboard and assistive tech still meet each game once.
+  fxAfterLayout(() => fxTickerStart(strip, () => ordered.map((g) => {
+    const c = scoreChip(g);
+    c.classList.add("fx-clone");
+    c.setAttribute("aria-hidden", "true");
+    c.setAttribute("tabindex", "-1");
+    return c;
+  })));
   return strip;
+}
+function scoreChip(g) {
+  const away = team(g.awayTeamId), home = team(g.homeTeamId);
+  // Each chip opens its game page; the game channel link lives on that page.
+  const chip = gameLink(g.scheduleId, "scorechip");
+  const decided = g.played;
+  for (const [t, score, won] of [[away, g.awayScore, decided && g.awayScore > g.homeScore], [home, g.homeScore, decided && g.homeScore > g.awayScore]]) {
+    const row = el("div", "sc-row" + (decided && !won ? " loser" : ""));
+    row.appendChild(logoImg(t.abbr, "sc-logo"));
+    row.appendChild(el("span", null, t.abbr));
+    row.appendChild(el("span", "sc-score", decided ? String(score) : record(t.teamId)));
+    chip.appendChild(row);
+  }
+  const status = g.isGotw ? "★ GOTW" : g.forced === "forceWin" ? "Force Win" : g.forced === "fairSim" ? "Fair Sim" : g.played ? "Final" : "Scheduled";
+  chip.appendChild(el("div", "sc-status" + (g.isGotw ? " gotw" : g.played ? " final" : ""), status));
+  return chip;
 }
 
 /* ---------- Front page (Home) ----------
@@ -969,6 +1309,7 @@ function heroCard(g) {
   const hero = gameLink(g.scheduleId, "hero");
   hero.style.setProperty("--bb-away", railColor(away.abbr));
   hero.style.setProperty("--bb-home", railColor(home.abbr));
+  hero.appendChild(fxGlow());
   hero.appendChild(logoImg(away.abbr, "wm wm-away"));
   hero.appendChild(logoImg(home.abbr, "wm wm-home"));
 
@@ -2048,6 +2389,71 @@ function faRow(p) {
   return r;
 }
 
+/* ---------- FX: the draft class reveal (fx-cards.css) ----------
+   Picks flip over in pick order with a short stagger. Only the first FX_REVEAL.maxRows
+   rows (the first round, about a screen and a half) animate, so a 388-pick class
+   doesn't take a minute: the rest are simply there. X-Factor and Superstar picks
+   flash as they land. Skip, any tap, key, wheel or scroll shows everything at once;
+   reduced motion never starts it. */
+const FX_REVEAL = { step: 34, maxRows: 32, flip: 420, pop: 560 };
+const fxDraft = { round: null, finish: null };
+
+function fxRevealPlan(picks, perRound) {
+  const cap = Math.max(1, Math.min(FX_REVEAL.maxRows, Number(perRound) || FX_REVEAL.maxRows));
+  return picks.map((p, i) => {
+    const animate = i < cap;
+    const dev = fxDevKey(p && p.dev);
+    return { animate, delay: animate ? i * FX_REVEAL.step : 0, elite: animate && (dev === "xfactor" || dev === "superstar") ? dev : null };
+  });
+}
+
+function fxRevealDraft(wrap, rows, picks) {
+  if (fxDraft.finish) fxDraft.finish();
+  if (!fxMotionOK() || !rows.length) return;
+  const plan = fxRevealPlan(picks, DATA && DATA.picksPerRound);
+  let total = 0;
+  rows.forEach((tr, i) => {
+    const step = plan[i];
+    if (!step || !step.animate) return;
+    tr.classList.add("fx-flip");
+    tr.style.setProperty("--fx-d", step.delay + "ms");
+    if (step.elite) { tr.classList.add("fx-elite"); tr.classList.add("fx-elite-" + step.elite); }
+    total = Math.max(total, step.delay + FX_REVEAL.flip + (step.elite ? FX_REVEAL.pop : 0));
+  });
+  wrap.classList.add("fx-revealing");
+  const skip = el("button", "week-pill fx-skip", "Skip ›");
+  skip.type = "button";
+  skip.setAttribute("aria-label", "Skip the draft reveal");
+  // A floating pill (fx-cards.css: position fixed), next to the table in reading order
+  // but outside the round pills, so adding and removing it never reflows the page.
+  if (wrap.parentNode) wrap.parentNode.insertBefore(skip, wrap);
+
+  let done = false, y0 = 0;
+  const onScroll = () => { if (Math.abs((window.scrollY || 0) - y0) > 12) finish(); };
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (fxDraft.finish === finish) fxDraft.finish = null;
+    if (typeof clearTimeout === "function") { clearTimeout(timer); clearTimeout(arm); }
+    wrap.classList.remove("fx-revealing");
+    for (const tr of rows) {
+      tr.classList.remove("fx-flip");
+      tr.classList.remove("fx-elite");
+      tr.classList.remove("fx-elite-xfactor");
+      tr.classList.remove("fx-elite-superstar");
+    }
+    skip.remove();
+    for (const t of ["pointerdown", "keydown", "wheel"]) document.removeEventListener(t, finish, true);
+    window.removeEventListener("scroll", onScroll);
+  };
+  skip.addEventListener("click", finish);
+  for (const t of ["pointerdown", "keydown", "wheel"]) document.addEventListener(t, finish, true);
+  // render() scrolls to the top as the page opens; only a scroll after that is the viewer's.
+  const arm = setTimeout(() => { y0 = window.scrollY || 0; window.addEventListener("scroll", onScroll, { passive: true }); }, 220);
+  const timer = setTimeout(finish, total + 80);
+  fxDraft.finish = finish;
+}
+
 /* The rookie class as drafted — a lasting snapshot of draft night. The roster channel
    posts it once and the Transactions list doesn't carry 224 picks, so this is where the
    whole class stays visible. Drafted players in draft order, then undrafted signings. */
@@ -2081,8 +2487,10 @@ function renderDraftClass(view) {
   thead.appendChild(hr);
   table.appendChild(thead);
   const tbody = el("tbody");
+  const rows = [];
   for (const p of shown) {
     const tr = el("tr");
+    rows.push(tr);
     tr.appendChild(el("td", null, p.round !== null ? `${p.round}.${String(p.pick).padStart(2, "0")}` : "UDFA"));
     tr.appendChild(el("td", null, p.team));
     const nameTd = el("td", "dc-player", p.name);
@@ -2100,6 +2508,11 @@ function renderDraftClass(view) {
   table.appendChild(tbody);
   wrap.appendChild(table);
   view.appendChild(wrap);
+  // The reveal plays when the class is first shown (arriving on Draft HQ, or a new round
+  // picked), never on the page's other re-renders (the pick calculator, the FA pills).
+  const fresh = lastRenderedTab !== "draft-hq" || fxDraft.round !== hqState.classRound;
+  fxDraft.round = hqState.classRound;
+  if (fresh) fxRevealDraft(wrap, rows, shown);
 }
 
 function renderDraftHq(view) {
@@ -3437,35 +3850,42 @@ let scoreWeek = null; // "stage-week" key of a past week being browsed on Home, 
 let expandedGame = null; // scheduleId of the game card expanded into its matchup panel
 
 function openTeam(teamId) {
+  const from = currentViewKey();
   viewTeamId = teamId;
   viewGameId = null;
+  // Draft HQ's rows open a team page too; left set, it outranked the team in render()
+  // and the tap only changed the URL.
+  viewDraftHq = false;
   needsView.open = null;
   try { history.pushState({ team: teamId }, "", "#team-" + teamId); } catch {}
-  render();
+  fxOpen("team", from, render);
 }
 function closeTeam(viaHistory) {
+  const from = currentViewKey();
   viewTeamId = null;
   if (!viaHistory) { try { history.pushState(null, "", location.pathname + location.search); } catch {} }
-  render();
+  fxClose(from, render);
 }
 function openDraftHq() {
   viewDraftHq = true;
   viewTeamId = null;
   viewGameId = null;
   try { history.pushState({ draft: true }, "", "#draft"); } catch {}
-  render();
+  fxGo("open", render);
 }
 function openGame(scheduleId) {
+  const from = currentViewKey();
   viewGameId = scheduleId;
   viewTeamId = null;
   viewDraftHq = false;
   try { history.pushState({ game: scheduleId }, "", "#game-" + scheduleId); } catch {}
-  render();
+  fxOpen("game", from, render);
 }
 function closeGame(viaHistory) {
+  const from = currentViewKey();
   viewGameId = null;
   if (!viaHistory) { try { history.pushState(null, "", location.pathname + location.search); } catch {} }
-  render();
+  fxClose(from, render);
 }
 /* The page a URL fragment names: #team-<id>, #game-<scheduleId> (the link the Discord
    matchup breakdown posts), or #draft. Read on load and on every back / forward. */
@@ -3478,9 +3898,15 @@ function routeFromHash() {
   viewDraftHq = hash === "#draft";
 }
 window.addEventListener("popstate", () => {
+  const from = currentViewKey();
   routeFromHash();
-  render();
+  fxHistory(from, render);
 });
+
+/* Which page is showing: a tab's name, or "team-<id>" / "game-<id>" / "draft-hq". */
+function currentViewKey() {
+  return viewDraftHq ? "draft-hq" : viewTeamId != null ? "team-" + viewTeamId : viewGameId != null ? "game-" + viewGameId : activeTab;
+}
 
 function render() {
   const view = document.getElementById("view");
@@ -3488,7 +3914,7 @@ function render() {
   // a team page's key is "team-<id>" while activeTab stays "teams", so comparing
   // to activeTab made every re-render on a team page (roster sort, draft-board
   // tap) read as a page change and teleport the user to the top.
-  const viewKey = viewDraftHq ? "draft-hq" : viewTeamId != null ? "team-" + viewTeamId : viewGameId != null ? "game-" + viewGameId : activeTab;
+  const viewKey = currentViewKey();
   const keepScroll = lastRenderedTab === viewKey;
   const y = window.scrollY;
   view.replaceChildren();
@@ -3508,18 +3934,27 @@ function render() {
    always did. On the narrowest phones the bar scrolls sideways (eleven tabs), so the
    tab switched to is scrolled into view: a link must never land on a tab the bar hides. */
 function showTab(name) {
+  const from = currentViewKey(), fromTab = activeTab;
   viewTeamId = null;
   viewGameId = null;
   viewDraftHq = false;
   try { history.replaceState(null, "", location.pathname + location.search); } catch {}
   activeTab = name;
-  for (const b of document.querySelectorAll(".tab")) {
-    const on = b.dataset.tab === name;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", String(on));
-    if (on) revealTab(b);
-  }
-  render();
+  // The bar's highlight moves inside the transition, so the old frame still shows the old tab.
+  const update = () => {
+    for (const b of document.querySelectorAll(".tab")) {
+      const on = b.dataset.tab === name;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", String(on));
+      if (on) revealTab(b);
+    }
+    render();
+  };
+  if (from === name) { update(); return; } // the tab already showing: a plain re-render
+  // A tab tapped from a team / game page: its own tab closes the page (the reverse
+  // morph when it opened from there); any other tab slides in by bar order.
+  if (from !== fromTab && name === fromTab) fxClose(from, update);
+  else fxGo(fxTabDirection(fromTab, name), update);
 }
 function revealTab(btn) {
   const bar = btn.parentNode;
@@ -3531,6 +3966,358 @@ function revealTab(btn) {
 
 for (const btn of document.querySelectorAll(".tab")) {
   btn.addEventListener("click", () => showTab(btn.dataset.tab));
+}
+
+/* ---------- Motion: page transitions, the score ticker, the GOTW glow ----------
+   One motion voice for the whole site: quick, confident, broadcast. Page changes run
+   through the View Transitions API where the browser has it and the member hasn't
+   asked for reduced motion; everywhere else they are the instant render they always
+   were. Nothing here ever holds content back: every effect is layered over a page
+   that is already complete. Styles live in fx-motion.css. */
+
+let fxTap = null; // { target, at }: the last tap, which an opening page morphs FROM
+let fxNamed = []; // elements wearing a view-transition-name this script gave them
+let fxGen = 0; // bumps per transition, so a transition cut short never touches its successor
+let fxLastOpen = null; // { kind, from, to, sel, abbr, gameId, scrollY }: lets Back morph home again
+
+const FX_TEAM_SOURCES = [".team-card", ".standings-row", ".rank-row", ".hero-team", ".row-link", ".row-tappable", "tr"];
+const FX_GAME_SOURCES = [".scorechip", ".hero", ".game-toggle"];
+
+if (typeof document.addEventListener === "function") {
+  // Capture phase: recorded before the tapped element's own handler opens the page.
+  document.addEventListener("click", (e) => { fxTap = { target: e && e.target, at: Date.now() }; }, true);
+}
+
+function fxMotionOk() {
+  try {
+    return typeof window.matchMedia === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch { return false; }
+}
+function fxCanTransition() {
+  return Boolean(DATA) && typeof document.startViewTransition === "function" && fxMotionOk();
+}
+function fxName(node, name) {
+  if (!node || !node.style) return;
+  node.style.viewTransitionName = name;
+  fxNamed.push(node);
+}
+function fxClearNames() {
+  for (const n of fxNamed) if (n.style) n.style.viewTransitionName = "";
+  fxNamed = [];
+}
+/* A box that crops what it holds: the score strip and the wide tables scroll sideways,
+   so a chip or row can sit inside the window yet be scrolled out of its own box. */
+function fxClips(node) {
+  if (!node || !node.classList) return false;
+  if (node.classList.contains("scorestrip") || node.classList.contains("table-wrap")) return true;
+  if (typeof window.getComputedStyle !== "function") return false;
+  try { return window.getComputedStyle(node).overflowX !== "visible"; } catch { return false; }
+}
+/* A morph only reads when its source is on screen; one scrolled away just crossfades.
+   On screen means inside the window both ways and inside every box that crops it: the
+   transition's snapshots are never cropped, so a chip scrolled out of the strip would
+   fly in from, or land, off the side of the phone. */
+function fxInView(node) {
+  if (!node || !node.isConnected || typeof node.getBoundingClientRect !== "function") return false;
+  const r = node.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return false;
+  const de = document.documentElement;
+  let left = 0, top = 0;
+  let right = window.innerWidth || (de && de.clientWidth) || 0;
+  let bottom = window.innerHeight || (de && de.clientHeight) || 0;
+  for (let a = node.parentNode; a && a !== document.body && a !== de; a = a.parentNode) {
+    if (!fxClips(a) || typeof a.getBoundingClientRect !== "function") continue;
+    const c = a.getBoundingClientRect();
+    left = Math.max(left, c.left); right = Math.min(right, c.right);
+    top = Math.max(top, c.top); bottom = Math.min(bottom, c.bottom);
+  }
+  const w = Math.min(r.right, right) - Math.max(r.left, left);
+  const h = Math.min(r.bottom, bottom) - Math.max(r.top, top);
+  // At least half of it (or half the box, for a row wider than its table) must show.
+  return h > 0 && w > 0 && w >= Math.min(r.width, right - left) / 2;
+}
+/* Scrolls the strip so this chip sits where the first one rests. Back onto Home draws a
+   fresh strip at its start, and the game's chip may be far along it. The ticker then
+   carries on from here. */
+function fxRevealChip(node) {
+  const strip = node && node.parentNode;
+  if (!strip || !strip.classList || !strip.classList.contains("scorestrip") || !fxInView(strip)) return;
+  const first = strip.children && strip.children[0];
+  if (first) strip.scrollLeft = Math.max(0, node.offsetLeft - first.offsetLeft);
+}
+/* The hero and its logos on either end of a morph. A team morph carries one logo; a
+   game morph two, away then home, or none when the source doesn't show exactly two. */
+function fxSourceParts(kind, node) {
+  if (!node || typeof node.querySelector !== "function") return null;
+  const logos = kind === "team" ? [node.querySelector("img:not(.wm)")]
+    : Array.from(node.querySelectorAll(".sc-logo, .hero-team .hero-logo, .game-row > .logo"));
+  return { hero: node, logos: kind === "game" && logos.length !== 2 ? [] : logos };
+}
+function fxPageParts(kind) {
+  if (typeof document.querySelector !== "function") return null;
+  const hero = document.querySelector(kind === "team" ? "#view .team-hero" : "#view .game-hero");
+  if (!hero) return null;
+  const logos = kind === "team" ? [hero.querySelector(".team-hero-logo")]
+    : [hero.querySelector(".hero-team.away .hero-logo"), hero.querySelector(".hero-team.home .hero-logo")];
+  return { hero, logos };
+}
+function fxNameParts(parts) {
+  if (!parts) return;
+  fxName(parts.hero, "fx-hero");
+  parts.logos.forEach((l, i) => fxName(l, i ? "fx-logo-b" : "fx-logo-a"));
+}
+/* The element the last tap landed in, if it was a moment ago: { node, sel }. */
+function fxTapped(selectors) {
+  const tap = fxTap;
+  fxTap = null;
+  if (!tap || Date.now() - tap.at > 1500 || !tap.target || typeof tap.target.closest !== "function") return null;
+  for (const sel of selectors) {
+    const node = tap.target.closest(sel);
+    if (node) return { node, sel };
+  }
+  return null;
+}
+/* The same source again after the page under it re-rendered: the same kind of element,
+   showing the same team logo (logoImg's alt is the abbr) or linking the same game.
+   reveal: in a page just drawn (the way back), a chip scrolled out of its strip is
+   scrolled into it, so the header lands on the chip rather than off screen. */
+function fxFindSource(rec, reveal) {
+  if (!rec || typeof document.querySelectorAll !== "function") return null;
+  const found = [];
+  for (const node of Array.from(document.querySelectorAll("#view " + rec.sel))) {
+    if (rec.kind === "team") {
+      const img = node.querySelector("img:not(.wm)");
+      if (!img || img.alt !== rec.abbr) continue;
+    } else {
+      const id = String(rec.gameId);
+      const link = node.getAttribute("data-fx-game") === id ? node : node.querySelector(`[data-fx-game="${id}"]`);
+      if (!link) continue;
+    }
+    if (fxInView(node)) return node;
+    found.push(node);
+  }
+  if (reveal) {
+    for (const node of found) {
+      fxRevealChip(node);
+      if (fxInView(node)) return node;
+    }
+  }
+  return null;
+}
+/* Tab order sets the slide: a tab to the right of the current one slides in from the right. */
+function fxTabDirection(fromTab, toTab) {
+  const order = Object.keys(RENDERERS);
+  return order.indexOf(toTab) < order.indexOf(fromTab) ? "back" : "fwd";
+}
+
+/* The one way a page change is drawn. nav: "fwd" / "back" (tab slides), "open" /
+   "close" (a page over the tab). morph, optional: { kind, from: parts in the page now
+   showing, to: () => parts in the page just rendered }. Without the API, with reduced
+   motion or before the data loads: update() runs at once, exactly as before. */
+function fxGo(nav, update, morph) {
+  if (!fxCanTransition()) { update(); return null; }
+  const gen = ++fxGen;
+  const root = document.documentElement;
+  const mark = (on) => {
+    if (!root || typeof root.setAttribute !== "function") return;
+    if (on) {
+      root.setAttribute("data-fx-nav", nav);
+      if (morph) root.setAttribute("data-fx-morph", morph.kind); else root.removeAttribute("data-fx-morph");
+    } else {
+      root.removeAttribute("data-fx-nav");
+      root.removeAttribute("data-fx-morph");
+    }
+  };
+  fxClearNames();
+  if (morph) fxNameParts(morph.from);
+  mark(true);
+  const done = () => { if (gen === fxGen) { fxClearNames(); mark(false); } };
+  let vt;
+  try {
+    vt = document.startViewTransition(() => {
+      if (gen !== fxGen) { update(); return; } // a newer change took over: just draw
+      fxClearNames();
+      update();
+      if (morph && morph.to) fxNameParts(morph.to());
+    });
+  } catch {
+    done();
+    update();
+    return null;
+  }
+  if (vt && vt.finished && typeof vt.finished.then === "function") vt.finished.then(done, done);
+  else done();
+  return vt;
+}
+/* Opening a team or game page: the tapped logo / card morphs into the page's header. */
+function fxOpen(kind, fromKey, update) {
+  if (!fxCanTransition()) { update(); return null; }
+  const src = fxTapped(kind === "team" ? FX_TEAM_SOURCES : FX_GAME_SOURCES);
+  const from = src && fxInView(src.node) ? fxSourceParts(kind, src.node) : null;
+  if (!from) { fxLastOpen = null; return fxGo("open", update); }
+  const logo = from.logos[0];
+  fxLastOpen = { kind, from: fromKey, to: currentViewKey(), sel: src.sel, abbr: kind === "team" && logo ? logo.alt : "", gameId: kind === "game" ? viewGameId : null, scrollY: window.scrollY || 0 };
+  return fxGo("open", update, { kind, from, to: () => fxPageParts(kind) });
+}
+/* Leaving a page: when it opened from the page we're going back to, the header morphs
+   back into its source, with that page scrolled to where it was left. */
+function fxClose(fromKey, update) {
+  if (!fxCanTransition()) { update(); return null; }
+  const rec = fxLastOpen;
+  if (!rec || rec.to !== fromKey || rec.from !== currentViewKey()) return fxGo("close", update);
+  return fxGo("close", update, {
+    kind: rec.kind,
+    from: fxPageParts(rec.kind),
+    to: () => {
+      window.scrollTo(0, rec.scrollY);
+      return fxSourceParts(rec.kind, fxFindSource(rec, true));
+    },
+  });
+}
+/* Back / forward: the reverse of whatever the change was. */
+function fxHistory(fromKey, update) {
+  const toKey = currentViewKey();
+  if (fromKey === toKey || !fxCanTransition()) { update(); return null; }
+  const isPage = (k) => /^(team|game|draft)-/.test(k);
+  const rec = fxLastOpen;
+  if (isPage(fromKey)) return fxClose(fromKey, update);
+  if (isPage(toKey)) {
+    // Forward again onto the page last opened from here: morph out of the same source.
+    if (rec && rec.from === fromKey && rec.to === toKey) {
+      const node = fxFindSource(rec);
+      if (node) {
+        rec.scrollY = window.scrollY || 0;
+        return fxGo("open", update, { kind: rec.kind, from: fxSourceParts(rec.kind, node), to: () => fxPageParts(rec.kind) });
+      }
+    }
+    return fxGo("open", update);
+  }
+  return fxGo(fxTabDirection(fromKey, toKey), update);
+}
+
+/* The GOTW billboard's light: a ribbon of the two teams' colors running round the edge
+   over a soft halo. Pure decoration, hidden from assistive tech. */
+function fxGlow() {
+  const glow = el("span", "fx-glow");
+  glow.setAttribute("aria-hidden", "true");
+  glow.appendChild(el("span", "fx-ring"));
+  return glow;
+}
+
+/* ---------- The score ticker ----------
+   When the score strip is wider than the screen it glides left at a reading pace and
+   loops without a seam (a second, hidden copy of the chips follows the first). It is
+   still the same scrollable strip: a swipe, the wheel or a keyboard focus moves it by
+   hand, and it carries on from wherever it was left. It holds still while hovered,
+   focused, touched, off screen or in a hidden tab, and never runs when everything
+   fits or the member prefers reduced motion. */
+const FX_TICKER_SPEED = 36; // px per second
+const FX_TICKER_REST = 1800; // ms of stillness after a touch / wheel before it glides again
+const FX_TICKER_INTRO = 1200; // ms the strip sits still on arrival, so the first chips can be read
+let fxTicker = null;
+let fxTickerHost = null; // { strip, makeClones, width }: what a resize re-measures
+
+function fxAfterLayout(fn) {
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => fn());
+}
+function fxTickerStop() {
+  const t = fxTicker;
+  if (!t) return;
+  fxTicker = null;
+  if (t.raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(t.raf);
+  for (const id of Object.values(t.timers)) clearTimeout(id);
+  for (const [type, fn] of t.listeners) t.strip.removeEventListener(type, fn);
+  if (typeof document.removeEventListener === "function") document.removeEventListener("visibilitychange", t.onVisibility);
+  if (t.observer) t.observer.disconnect();
+  for (const c of t.clones) c.remove();
+  t.strip.classList.remove("fx-ticking");
+  t.strip.scrollLeft = 0;
+}
+/* resumeAt, from a resize: the strip is being re-measured, not arriving, so it skips the
+   intro hold and keeps the picture it was showing. */
+function fxTickerStart(strip, makeClones, resumeAt) {
+  fxTickerStop();
+  fxTickerHost = strip ? { strip, makeClones, width: strip.clientWidth } : null;
+  if (!strip || !strip.isConnected || !fxMotionOk() || typeof requestAnimationFrame !== "function") return null;
+  if (!(strip.scrollWidth > strip.clientWidth + 1)) return null; // everything fits: a still strip
+  const originals = Array.from(strip.children);
+  if (!originals.length) return null;
+  const clones = makeClones();
+  for (const c of clones) strip.appendChild(c);
+  // One loop is the distance from the first chip to its copy; scrolling that far shows
+  // exactly what scrollLeft 0 shows, so the wrap is invisible.
+  const period = clones.length ? clones[0].offsetLeft - originals[0].offsetLeft : 0;
+  if (!(period > 0)) { for (const c of clones) c.remove(); return null; }
+  if (resumeAt > 0) strip.scrollLeft = resumeAt % period;
+  const t = {
+    strip, clones, period, pos: strip.scrollLeft, last: strip.scrollLeft, prev: 0, raf: 0,
+    holds: new Set(), timers: {}, listeners: [], observer: null, onVisibility: null,
+  };
+  fxTicker = t;
+  strip.classList.add("fx-ticking");
+  const frame = (now) => {
+    t.raf = 0;
+    if (fxTicker !== t) return;
+    if (!strip.isConnected || !fxMotionOk()) { fxTickerStop(); return; }
+    if (t.holds.size) { t.prev = 0; return; } // paused: the loop sleeps until released
+    const cur = strip.scrollLeft;
+    if (Math.abs(cur - t.last) > 2) t.pos = cur; // moved by hand: carry on from there
+    if (t.prev) t.pos += FX_TICKER_SPEED * Math.max(0, Math.min(now - t.prev, 64)) / 1000;
+    while (t.pos >= t.period) t.pos -= t.period;
+    strip.scrollLeft = t.pos;
+    t.last = t.pos;
+    t.prev = now;
+    t.raf = requestAnimationFrame(frame);
+  };
+  const wake = () => { if (fxTicker === t && !t.holds.size && !t.raf) t.raf = requestAnimationFrame(frame); };
+  const hold = (why) => { clearTimeout(t.timers[why]); delete t.timers[why]; t.holds.add(why); };
+  const release = (why, after) => {
+    clearTimeout(t.timers[why]);
+    if (after) { t.timers[why] = setTimeout(() => { delete t.timers[why]; t.holds.delete(why); wake(); }, after); return; }
+    delete t.timers[why];
+    t.holds.delete(why);
+    wake();
+  };
+  const on = (type, fn) => { strip.addEventListener(type, fn, { passive: true }); t.listeners.push([type, fn]); };
+  on("pointerenter", (e) => { if (!e || e.pointerType !== "touch") hold("hover"); });
+  on("pointerleave", (e) => { if (!e || e.pointerType !== "touch") release("hover"); });
+  on("focusin", () => hold("focus"));
+  on("focusout", (e) => { if (!(e && e.relatedTarget && typeof strip.contains === "function" && strip.contains(e.relatedTarget))) release("focus"); });
+  on("touchstart", () => hold("touch"));
+  on("touchend", () => release("touch", FX_TICKER_REST));
+  on("touchcancel", () => release("touch", FX_TICKER_REST));
+  on("wheel", () => { hold("wheel"); release("wheel", FX_TICKER_REST); });
+  t.onVisibility = () => { if (document.hidden) hold("hidden"); else release("hidden"); };
+  if (typeof document.addEventListener === "function") document.addEventListener("visibilitychange", t.onVisibility);
+  if (document.hidden) hold("hidden");
+  // A re-measure must not drop a hold that is still true: focus inside, a mouse over it.
+  if (document.activeElement && typeof strip.contains === "function" && strip.contains(document.activeElement)) hold("focus");
+  try { if (typeof strip.matches === "function" && strip.matches(":hover")) hold("hover"); } catch { /* no :hover support */ }
+  if (typeof IntersectionObserver === "function") {
+    t.observer = new IntersectionObserver((entries) => {
+      for (const en of entries) { if (en.isIntersecting) release("offscreen"); else hold("offscreen"); }
+    });
+    t.observer.observe(strip);
+  }
+  if (resumeAt === undefined) {
+    hold("intro");
+    release("intro", FX_TICKER_INTRO);
+  } else wake();
+  return t;
+}
+if (typeof window.addEventListener === "function") {
+  // A rotated phone or resized window can make the strip fit, or stop fitting. A phone
+  // also fires resize as its address bar hides and shows on an ordinary scroll: the
+  // strip's width is the same then, so nothing is re-measured and the glide goes on.
+  let resizeTimer = 0;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const host = fxTickerHost;
+      if (!host || !host.strip.isConnected || host.strip.clientWidth === host.width) return;
+      fxTickerStart(host.strip, host.makeClones, host.strip.scrollLeft);
+    }, 200);
+  });
 }
 
 /* This shell is shared source — the bot copies site/ into EVERY league's repo — so

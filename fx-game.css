@@ -1,0 +1,169 @@
+/* ---------- Game page motion (#game-<scheduleId>) ----------
+   Loaded after styles.css. The header plays like a pregame graphic: the two team-color
+   fields wipe in from opposite sides and meet at a slash, each logo rides in with its
+   color, the AT (or the final score) pops at the seam, the records and meta land last.
+   Below it, each card plays once as it scrolls into view: comparison bars grow out from
+   the middle, strengths, weaknesses, clashes and game-plan notes rise in order.
+
+   How it stays safe: every animation runs FROM a start state TO the element's own
+   style (keyframes carry only `from`, fill `backwards`), so the resting page is the
+   final page. app.js only sets data-fx on the hero and fx-reveal / fx-in on cards;
+   without them, without this file, or under reduced motion, everything just shows.
+   Only transform, opacity and clip-path move. No colors beyond the tokens and the
+   team colors app.js already sets (--bb-away / --bb-home, --fx-c). */
+
+:root {
+  --fxg-out: cubic-bezier(.22, 1, .36, 1);   /* fast start, soft landing */
+  --fxg-pop: cubic-bezier(.34, 1.56, .64, 1); /* a little overshoot, for the AT / score */
+}
+
+/* ---------- The header at rest ----------
+   The billboard's split, drawn as two layers so it can move: each team's color
+   field clipped at a leaning slash, a thin bright seam between them (gold on the
+   Game of the Week, white otherwise). The dark plate under them is what shows
+   before the fields arrive. */
+.hero.game-hero { background: #0c0d0e; }
+.hero.game-hero > .fx-field,
+.hero.game-hero > .fx-seam {
+  position: absolute; inset: 0; z-index: 0;
+  pointer-events: none;
+}
+.fx-field.away {
+  background:
+    radial-gradient(130% 120% at 0% 0%, rgba(255,255,255,.12), transparent 58%),
+    linear-gradient(rgba(10,11,12,.36), rgba(12,13,14,.55)),
+    linear-gradient(105deg, transparent 22%, rgba(0,0,0,.32) 52%),
+    var(--bb-away, #333);
+  clip-path: polygon(0 0, calc(50% + 20px) 0, calc(50% - 20px) 100%, 0 100%);
+}
+.fx-field.home {
+  background:
+    radial-gradient(130% 120% at 100% 0%, rgba(255,255,255,.12), transparent 58%),
+    linear-gradient(rgba(10,11,12,.36), rgba(12,13,14,.55)),
+    linear-gradient(105deg, rgba(0,0,0,.32) 48%, transparent 78%),
+    var(--bb-home, #333);
+  clip-path: polygon(calc(50% + 24px) 0, 100% 0, 100% 100%, calc(50% - 16px) 100%);
+}
+.fx-seam {
+  background: linear-gradient(rgba(255,255,255,.7), rgba(255,255,255,.18));
+  clip-path: polygon(calc(50% + 20px) 0, calc(50% + 24px) 0, calc(50% - 16px) 100%, calc(50% - 20px) 100%);
+}
+.hero.game-hero:not(.plain) > .fx-seam {
+  background: linear-gradient(var(--gold-bright), rgba(232,184,75,.3));
+}
+
+/* The middle of the header once the game is played: the score, winner bright. */
+.hero-vs.hero-score {
+  display: flex; align-items: baseline; gap: 8px; position: relative;
+  font-size: 22px; letter-spacing: .02em; color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+/* The score as one sentence for screen readers, out of sight (and out of the flex gap). */
+.hero-score .hs-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+.hero-score .hs-num.lost { color: rgba(255,255,255,.55); }
+.hero-score .hs-dash { font-size: .62em; color: rgba(255,255,255,.5); }
+@media (min-width: 900px) {
+  .hero-vs.hero-score { font-size: 38px; gap: 10px; }
+}
+
+/* ---------- Bars at rest ----------
+   Tendency rows: a split bar under the numbers, each side's league standing growing
+   out from the middle in its team color (1st of 32 fills the half). The side with the
+   worse rank steps back. Unit edges: a bar from the middle toward whoever holds the
+   edge. Decorative only (aria-hidden): the numbers beside them carry the meaning. */
+.fx-cmp {
+  grid-column: 1 / -1;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+  height: 4px; margin: -6px 0 2px;
+}
+.fx-cmp-side, .fx-edge-side {
+  position: relative; overflow: hidden;
+  border-radius: 2px; background: var(--surface-2);
+}
+.fx-bar {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  background: var(--fx-c, var(--text-faint));
+  transform: scaleX(var(--fx-w, 0));
+}
+.fx-cmp-side.away .fx-bar, .fx-edge-side.off .fx-bar { transform-origin: right center; }
+.fx-cmp-side.home .fx-bar, .fx-edge-side.def .fx-bar { transform-origin: left center; }
+.fx-bar.trail { opacity: .4; }
+.fx-edge {
+  flex: 1 0 100%; order: 5;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+  height: 5px;
+}
+.fx-edge-side { border-radius: 3px; }
+
+/* Hover, where there is one: the logo leans in under the pointer. */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .game-hero .hero-logo { transition: scale .2s var(--fxg-out), rotate .2s var(--fxg-out); }
+  .game-hero .hero-team:hover .hero-logo { scale: 1.07; rotate: -3deg; }
+}
+
+/* ---------- Motion ---------- */
+@media screen and (prefers-reduced-motion: no-preference) {
+  /* The hero has its own entrance; the view's generic rise would only blur it. */
+  .view > .game-hero[data-fx="full"], .view > .game-hero[data-fx="morph"] { animation: none; }
+
+  /* Full intro, ~780 ms. */
+  .game-hero[data-fx="full"] > .fx-field.away { animation: fxg-from-left 420ms var(--fxg-out) backwards; }
+  .game-hero[data-fx="full"] > .fx-field.home { animation: fxg-from-right 420ms var(--fxg-out) 40ms backwards; }
+  .game-hero[data-fx="full"] > .fx-seam { transform-origin: 50% 0; animation: fxg-seam 260ms var(--fxg-out) 260ms backwards; }
+  .game-hero[data-fx="full"] > .wm { animation: fxg-fade 520ms ease-out 160ms backwards; }
+  .game-hero[data-fx="full"] .hero-eyebrow { animation: fxg-nudge 300ms var(--fxg-out) 80ms backwards; }
+  .game-hero[data-fx="full"] .hero-team.away { animation: fxg-ride-left 440ms var(--fxg-out) 120ms backwards; }
+  .game-hero[data-fx="full"] .hero-team.home { animation: fxg-ride-right 440ms var(--fxg-out) 170ms backwards; }
+  .game-hero[data-fx="full"] .hero-logo { animation: fxg-logo 440ms var(--fxg-out) 140ms backwards; }
+  .game-hero[data-fx="full"] .hero-team.home .hero-logo { animation-delay: 190ms; }
+  .game-hero[data-fx="full"] .hero-vs { animation: fxg-pop 360ms var(--fxg-pop) 380ms backwards; }
+  .game-hero[data-fx="full"] .hero-rec { animation: fxg-up 280ms var(--fxg-out) 440ms backwards; }
+  .game-hero[data-fx="full"] .hero-meta { animation: fxg-up 300ms var(--fxg-out) 480ms backwards; }
+
+  /* Entered through a morph, or a game already opened this session: the art is
+     already in place, only the small beats play (~450 ms). */
+  .game-hero[data-fx="morph"] .hero-vs,
+  .game-hero[data-fx="short"] .hero-vs { animation: fxg-pop 340ms var(--fxg-pop) 100ms backwards; }
+  .game-hero[data-fx="morph"] .hero-rec, .game-hero[data-fx="morph"] .hero-meta,
+  .game-hero[data-fx="short"] .hero-rec, .game-hero[data-fx="short"] .hero-meta { animation: fxg-up 260ms var(--fxg-out) 170ms backwards; }
+
+  /* Phones stack the header: the AT sits after a 66px indent, so it pops from there.
+     Side by side (900px and up) it sits centered and pops from its own middle. */
+  .game-hero .hero-vs { transform-origin: 66px 50%; }
+  @media (min-width: 900px) { .game-hero .hero-vs { transform-origin: 50% 50%; } }
+
+  /* The cascade. Armed (fx-reveal) cards hold at the start until they scroll into
+     view (fx-in), then play once; each row waits --fx-i steps. */
+  .fx-reveal:not(.fx-in) .fx-bar { transform: scaleX(0); }
+  .fx-reveal.fx-in .fx-bar { animation: fxg-grow 520ms var(--fxg-out) calc(80ms + var(--fx-i, 0) * 45ms) backwards; }
+
+  .fx-reveal:not(.fx-in) > .fx-item.gs-row,
+  .fx-reveal:not(.fx-in) > .fx-item.gs-none,
+  .fx-reveal:not(.fx-in) > .fx-item.plan-note { opacity: 0; }
+  .fx-reveal.fx-in > .fx-item.gs-row,
+  .fx-reveal.fx-in > .fx-item.gs-none,
+  .game-clashes.fx-in > .fx-item.plan-note { animation: fxg-rise 340ms var(--fxg-out) calc(var(--fx-i, 0) * 55ms) backwards; }
+  .plan-card.fx-in > .fx-item.plan-note { animation: fxg-note 360ms var(--fxg-out) calc(60ms + var(--fx-i, 0) * 70ms) backwards; }
+
+  .fx-reveal:not(.fx-in) > .edge-row > .chip { opacity: 0; }
+  .fx-reveal.fx-in > .edge-row > .chip { animation: fxg-chip 320ms var(--fxg-pop) calc(340ms + var(--fx-i, 0) * 45ms) backwards; }
+}
+
+@keyframes fxg-from-left { from { transform: translate3d(-62%, 0, 0); } }
+@keyframes fxg-from-right { from { transform: translate3d(62%, 0, 0); } }
+@keyframes fxg-seam { from { transform: scaleY(0); opacity: 0; } }
+@keyframes fxg-fade { from { opacity: 0; } }
+@keyframes fxg-nudge { from { opacity: 0; transform: translate3d(-10px, 0, 0); } }
+@keyframes fxg-ride-left { from { opacity: 0; transform: translate3d(-56px, 0, 0); } }
+@keyframes fxg-ride-right { from { opacity: 0; transform: translate3d(56px, 0, 0); } }
+@keyframes fxg-logo { from { transform: scale(.72) rotate(-8deg); } }
+@keyframes fxg-pop { from { opacity: 0; transform: scale(.35); } 55% { opacity: 1; } }
+@keyframes fxg-up { from { opacity: 0; transform: translate3d(0, 8px, 0); } }
+@keyframes fxg-grow { from { transform: scaleX(0); } }
+@keyframes fxg-rise { from { opacity: 0; transform: translate3d(0, 8px, 0); } }
+@keyframes fxg-note { from { opacity: 0; transform: translate3d(-10px, 0, 0); } }
+@keyframes fxg-chip { from { opacity: 0; transform: scale(.8); } }
