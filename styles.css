@@ -949,6 +949,10 @@ a.card:active { background: var(--surface-2); }
   padding-top: 8px;
 }
 .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The Rules tab ships hidden and app.js shows it only for a league with rules. The author
+   display: flex above beats the browser's own [hidden] rule (the iOS hint's bug, 2026-10-16),
+   so without this every league would get an empty Rules tab. */
+.tab[hidden] { display: none; }
 /* Ten tabs on a 360px phone are 36px each. "Leaders" (37px at 9px) and "Updates" (39px)
    don't fit, and shrinking every label to 8px to squeeze them in left the two about 2px
    apart and hard to read (review, 2026-10-16). So the phone bar abbreviates those two the
@@ -984,6 +988,19 @@ a.card:active { background: var(--surface-2); }
 /* Below 360 (320px phones): 8px keeps all eleven on one screen down to about 312px. */
 @media (max-width: 359px) {
   .tab { font-size: 8px; }
+}
+/* Twelve tabs when the league has rules (2026-10-22). At 2px a side that bar is 368px wide,
+   so on a 360px phone Trade rode 8px off the edge. From 367px down a twelve-tab bar takes
+   1.5px a side instead: every label whole at 360px, 3px apart at the closest (measured in
+   Chrome). Eleven-tab bars are untouched, and a browser without :has() scrolls the 8px. */
+@media (max-width: 367px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 1.5px; padding-right: 1.5px; }
+}
+/* Below 360, with the 8px labels: at 1.5px the twelve-tab bar measured 326px, so a 320px
+   phone scrolled Trade 6px off where the eleven-tab bar fits (review, 2026-10-22). 1px a
+   side measured 314px: every label whole at 320px, 2px apart at the closest. */
+@media (max-width: 359px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 1px; padding-right: 1px; }
 }
 .tab svg { width: 20px; height: 20px; fill: currentColor; }
 .tab.active { color: var(--red-bright); }
@@ -1089,6 +1106,19 @@ a.card:active { background: var(--surface-2); }
    desktops so the nav fits a 900px window instead of scrolling. */
 @media (min-width: 900px) and (max-width: 1023px) {
   .tab { padding: 10px 8px 12px; gap: 6px; }
+}
+/* Twelve tabs when the league has rules (2026-10-22): the nav at these paddings measured
+   1340px with full labels and 1033 / 949px short (Chrome), so it would scroll at every
+   desktop width just past each step above. A twelve-tab nav takes a little less padding a
+   tab and fits where the eleven-tab one does. Eleven-tab navs are untouched. */
+@media (min-width: 900px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 13px; padding-right: 13px; }
+}
+@media (min-width: 900px) and (max-width: 1279px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 10px; padding-right: 10px; }
+}
+@media (min-width: 900px) and (max-width: 1023px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 5px; padding-right: 5px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -1488,4 +1518,59 @@ a.card:active { background: var(--surface-2); }
 .game-missing-text { margin-top: 6px; font-size: 13px; color: var(--text-dim); line-height: 1.45; }
 @media (min-width: 700px) {
   .game-sides { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+
+/* ---------- Rules (#rules, #rules-<id>) ----------
+   The league's rules from site.json, one card per section in the commissioner's order.
+   Body text is the format the bot shares with Discord (app.js formatRuleBody); lines wrap
+   at a reading measure on wide screens. A #rules-<id> link lights its card for a moment
+   (.rule-flash): the light fades in and out with motion, and with reduced motion it just
+   appears and goes. */
+.rule-card {
+  padding: 14px 16px 16px;
+  /* scrollIntoView lands the card below the sticky top bar, not under it. */
+  scroll-margin-top: calc(74px + env(safe-area-inset-top));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rule-card { transition: border-color .5s ease, box-shadow .5s ease, background-color .5s ease; }
+}
+.rule-card.rule-flash {
+  border-color: var(--red);
+  background-color: #fff8f8;
+  box-shadow: 0 0 0 3px rgba(208,10,16,.16), 0 1px 3px rgba(16,21,27,.06);
+}
+.rule-head { display: flex; align-items: flex-start; gap: 12px; }
+.rule-title {
+  flex: 1; min-width: 0;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-stretch: 85%;
+  font-size: 18px; line-height: 1.2;
+  overflow-wrap: break-word;
+}
+.rule-copy {
+  flex: none; margin-top: -1px;
+  background: var(--surface); border: 1px solid var(--edge); border-radius: 999px;
+  color: var(--text-dim); font-family: "Archivo", sans-serif; font-weight: 800; font-size: 11px;
+  padding: 5px 11px; cursor: pointer; white-space: nowrap;
+}
+.rule-copy:hover { background: var(--surface-2); }
+/* The house "Copied" green (.copied-flash), which the button's own grey above would hide. */
+.rule-copy.copied-flash { color: var(--up); border-color: rgba(18,138,77,.35); }
+.rule-copy:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+.rule-body {
+  margin-top: 8px; max-width: 68ch;
+  font-size: 14.5px; line-height: 1.55;
+  overflow-wrap: break-word;
+}
+/* Spaces stay as typed, the way Discord shows them; line breaks are app.js's <br>s. */
+.rule-body p, .rule-body li { white-space: pre-wrap; }
+.rule-body > * + * { margin-top: 10px; }
+.rule-body ul { padding-left: 20px; }
+.rule-body li + li { margin-top: 6px; }
+.rule-body li::marker { color: var(--red); }
+.rule-body strong { font-weight: 700; }
+@media (min-width: 900px) {
+  .rules { max-width: 760px; margin: 0 auto; }
+  .rule-card { padding: 18px 22px 20px; scroll-margin-top: 128px; }
+  .rule-title { font-size: 20px; }
+  .rule-body { font-size: 15px; }
 }

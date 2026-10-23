@@ -2518,7 +2518,7 @@ function renderDraftClass(view) {
 function renderDraftHq(view) {
   const back = el("button", "team-back", "← Back");
   back.type = "button";
-  back.addEventListener("click", () => { viewDraftHq = false; try { history.pushState(null, "", location.pathname + location.search); } catch {} render(); });
+  back.addEventListener("click", () => { viewDraftHq = false; try { history.pushState(null, "", tabUrl(activeTab)); } catch {} render(); });
   view.appendChild(back);
 
   view.appendChild(sectionHead("Draft HQ", "the whole league's draft picture"));
@@ -3836,14 +3836,195 @@ function renderTransactions(view) {
   view.appendChild(el("div", "news-disclaimer", "Every roster move the bot saw between syncs, newest first. Trades list the players each team received; draft picks don't appear in roster data, so a side that got no players got picks or nothing. Moves between teams in one sync are grouped as one deal. Tap a player still in the league for his full card."));
 }
 
+/* ---------- Rules tab ----------
+   The league's rules, from site.json's rules (the bot's /rules-edit; leagueRules.ts
+   buildSiteRules): one card per section, in the commissioner's order, {tradeQuorum}
+   already filled in. The tab button ships hidden and only a league with sections sees
+   it, so another league, or an older site.json without the field, never does. Bot posts
+   link to #rules (the tab) and #rules-<id> (one section: the trade vote card to
+   #rules-trades, /force-result to #rules-forces, the matchup breakdown to
+   #rules-game-day). A section's id never changes once made, so an old link still lands. */
+
+const RULE_FLASH_MS = 1800; // how long a linked section stays lit
+const RULE_COPIED_MS = 1600; // how long "Copied" shows on the button
+
+/* The sections to show: what site.json carries, less any row without an id or title. */
+function ruleSections() {
+  const r = DATA && DATA.rules;
+  const list = r && Array.isArray(r.sections) ? r.sections : [];
+  return list.filter((s) => s && typeof s.id === "string" && s.id && typeof s.title === "string");
+}
+function hasRules() { return ruleSections().length > 0; }
+
+/* The Rules tab button is shown only for a league that has rules. */
+function syncRulesTab() {
+  for (const b of document.querySelectorAll(".tab")) {
+    if (b.dataset.tab === "rules") b.hidden = !hasRules();
+  }
+}
+
+/* #rules (the tab) and #rules-<id> (one section of it) as { section }, the id or null;
+   null for any other fragment. "#rules-" with nothing after it is the tab. */
+function rulesRoute(hash) {
+  const m = String(hash || "").match(/^#rules(?:-(.*))?$/);
+  return m ? { section: m[1] || null } : null;
+}
+
+/* The link to one section: this page's address with no query and #rules-<id>. */
+function ruleLink(id) {
+  return location.origin + location.pathname + "#rules-" + id;
+}
+
+/* "Oct 22, 2026", or "" when the date is missing or unreadable. */
+function ruleUpdated(iso) {
+  if (typeof iso !== "string" || !iso) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/* A rule's text as the page shows it, in the one format the bot shares with Discord
+   (leagueRules.ts): a blank line starts a new paragraph, a single newline is a line
+   break (Discord shows it as one too), a line starting "- " or "• " is a bullet and a
+   run of them is one list, **double asterisks** are bold, and nothing else is markup.
+   Built from elements and text nodes only, never from an HTML string, so a rule that
+   says "<img onerror=...>" shows exactly that. */
+function formatRuleBody(text) {
+  const body = el("div", "rule-body");
+  let para = null, list = null;
+  for (const line of String(text || "").replace(/\r\n?/g, "\n").split("\n")) {
+    if (!line.trim()) { para = null; list = null; continue; }
+    if (/^(?:- |• )/.test(line)) {
+      para = null;
+      if (!list) list = body.appendChild(el("ul"));
+      ruleInline(list.appendChild(el("li")), line.slice(2));
+      continue;
+    }
+    list = null;
+    if (para) para.appendChild(el("br"));
+    else para = body.appendChild(el("p"));
+    ruleInline(para, line);
+  }
+  return body;
+}
+/* One line into node: **bold** runs as <strong>, everything else as plain text. A bold
+   never spans lines, the same as on the Discord side. */
+function ruleInline(node, text) {
+  let last = 0;
+  for (const m of text.matchAll(/\*\*(.+?)\*\*/g)) {
+    if (m.index > last) node.appendChild(document.createTextNode(text.slice(last, m.index)));
+    node.appendChild(el("strong", null, m[1]));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) node.appendChild(document.createTextNode(text.slice(last)));
+}
+
+/* Copies text with the Clipboard API, or the old select-and-copy where the page can't
+   use it (an older browser, a refused permission). Resolves true or false; never throws
+   or rejects. */
+function copyText(text) {
+  const legacy = () => {
+    let ta = null;
+    try {
+      if (typeof document.execCommand !== "function" || !document.body) return false;
+      ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "0";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      if (typeof ta.setSelectionRange === "function") ta.setSelectionRange(0, text.length); // iOS
+      return document.execCommand("copy") === true;
+    } catch {
+      return false;
+    } finally {
+      if (ta && typeof ta.remove === "function") ta.remove();
+    }
+  };
+  try {
+    const clip = typeof navigator !== "undefined" && navigator ? navigator.clipboard : null;
+    if (clip && typeof clip.writeText === "function") return Promise.resolve(clip.writeText(text)).then(() => true, legacy);
+  } catch {}
+  return Promise.resolve(legacy());
+}
+
+/* "Copy link": the section's own link, then "Copied" for a moment. */
+function ruleCopyButton(id, titleId) {
+  const btn = el("button", "rule-copy", "Copy link");
+  btn.type = "button";
+  btn.setAttribute("aria-describedby", titleId); // which section, for a screen reader
+  btn.setAttribute("aria-live", "polite"); // and that it copied
+  let reset = 0;
+  btn.addEventListener("click", () => {
+    copyText(ruleLink(id)).then((ok) => {
+      btn.textContent = ok ? "Copied" : "Couldn't copy";
+      btn.classList.toggle("copied-flash", ok);
+      clearTimeout(reset);
+      reset = setTimeout(() => { btn.textContent = "Copy link"; btn.classList.remove("copied-flash"); }, RULE_COPIED_MS);
+    });
+  });
+  return btn;
+}
+
+function ruleCard(s) {
+  const card = el("section", "card rule-card");
+  card.id = "rules-" + s.id;
+  const head = el("div", "rule-head");
+  const title = el("h2", "rule-title", s.title);
+  // Not "rules-<id>-title": sections "trades" and "trades-title" would both have the id
+  // rules-trades-title, and #rules-trades-title would find the Trades heading first.
+  title.id = "rule-title-" + s.id;
+  head.appendChild(title);
+  head.appendChild(ruleCopyButton(s.id, title.id));
+  card.appendChild(head);
+  card.appendChild(formatRuleBody(typeof s.body === "string" ? s.body : ""));
+  return card;
+}
+
+/* No numbers on the cards: the sections aren't steps, and the commissioner reorders them. */
+function renderRules(view) {
+  const sections = ruleSections();
+  const updated = sections.length ? ruleUpdated(DATA.rules.updatedAt) : "";
+  const wrap = el("div", "rules");
+  wrap.appendChild(sectionHead("League Rules", updated ? `Updated ${updated}` : ""));
+  if (!sections.length) {
+    const card = el("div", "card");
+    card.appendChild(el("div", "empty", "No league rules posted yet."));
+    wrap.appendChild(card);
+  } else {
+    const list = el("div", "grid rules-list");
+    for (const s of sections) list.appendChild(ruleCard(s));
+    wrap.appendChild(list);
+  }
+  view.appendChild(wrap);
+}
+
+/* A #rules-<id> link's section, once the tab is drawn: scrolled to the top of the window
+   (the card's scroll-margin-top keeps it clear of the sticky bars) and lit for a moment.
+   An id the league doesn't have leaves the tab at its top. Once per link: a later
+   re-render of the tab stays where the member scrolled to. */
+function revealRuleSection() {
+  const id = viewRuleId;
+  viewRuleId = null;
+  if (!id) return;
+  const card = document.getElementById("rules-" + id);
+  if (!card || !card.classList.contains("rule-card")) return;
+  if (typeof card.scrollIntoView === "function") card.scrollIntoView({ block: "start" });
+  card.classList.add("rule-flash");
+  setTimeout(() => card.classList.remove("rule-flash"), RULE_FLASH_MS);
+}
+
 /* ---------- App shell ---------- */
 
-const RENDERERS = { home: renderHome, teams: renderTeams, players: renderPlayers, freeagents: renderFreeAgents, standings: renderStandings, rankings: renderRankings, leaders: renderLeaders, updates: renderUpdates, transactions: renderTransactions, news: renderNews, trade: renderTrade };
+const RENDERERS = { home: renderHome, teams: renderTeams, players: renderPlayers, freeagents: renderFreeAgents, standings: renderStandings, rankings: renderRankings, leaders: renderLeaders, updates: renderUpdates, transactions: renderTransactions, news: renderNews, rules: renderRules, trade: renderTrade };
 let activeTab = "home";
 let lastRenderedTab = null;
 let viewTeamId = null; // non-null = the team detail page is open over the current tab
 let viewDraftHq = false; // the league-wide Draft HQ page
 let viewGameId = null; // non-null = a game page (#game-<scheduleId>) is open over the current tab
+let viewRuleId = null; // a #rules-<id> link's section, scrolled to once the Rules tab is drawn
+let tabBeforeRules = "home"; // the tab showing before the Rules tab took over, for Back off a #rules link
 const teamSort = { col: "ovr", dir: -1 }; // roster table sort state, survives re-renders
 const needsView = { sort: "need", open: null }; // draft board: sort mode + which group is expanded
 let scoreWeek = null; // "stage-week" key of a past week being browsed on Home, null = current week
@@ -3863,7 +4044,7 @@ function openTeam(teamId) {
 function closeTeam(viaHistory) {
   const from = currentViewKey();
   viewTeamId = null;
-  if (!viaHistory) { try { history.pushState(null, "", location.pathname + location.search); } catch {} }
+  if (!viaHistory) { try { history.pushState(null, "", tabUrl(activeTab)); } catch {} }
   fxClose(from, render);
 }
 function openDraftHq() {
@@ -3884,11 +4065,12 @@ function openGame(scheduleId) {
 function closeGame(viaHistory) {
   const from = currentViewKey();
   viewGameId = null;
-  if (!viaHistory) { try { history.pushState(null, "", location.pathname + location.search); } catch {} }
+  if (!viaHistory) { try { history.pushState(null, "", tabUrl(activeTab)); } catch {} }
   fxClose(from, render);
 }
 /* The page a URL fragment names: #team-<id>, #game-<scheduleId> (the link the Discord
-   matchup breakdown posts), or #draft. Read on load and on every back / forward. */
+   matchup breakdown posts), or #draft; or the tab, #rules / #rules-<id> (the links bot
+   posts put where arguments start). Read on load and on every back / forward. */
 function routeFromHash() {
   const hash = location.hash || "";
   const team = hash.match(/^#team-(\d+)$/);
@@ -3896,12 +4078,32 @@ function routeFromHash() {
   viewTeamId = team ? Number(team[1]) : null;
   viewGameId = game ? Number(game[1]) : null;
   viewDraftHq = hash === "#draft";
+  const rules = rulesRoute(hash);
+  viewRuleId = null;
+  if (rules) {
+    // A league without rules has no Rules tab: its link opens Home.
+    if (!hasRules()) { activeTab = "home"; return; }
+    if (activeTab !== "rules") tabBeforeRules = activeTab;
+    activeTab = "rules";
+    viewRuleId = rules.section;
+  } else if (activeTab === "rules" && !team && !game && !viewDraftHq) {
+    // Back off a #rules link onto the bare address: the tab that was showing before it.
+    activeTab = tabBeforeRules;
+  }
 }
 window.addEventListener("popstate", () => {
-  const from = currentViewKey();
+  const from = currentViewKey(), fromTab = activeTab;
   routeFromHash();
-  fxHistory(from, render);
+  // A fragment that changes the tab (#rules, or Back off it) moves the bar's highlight
+  // too, inside the transition the way a tap does.
+  fxHistory(from, activeTab === fromTab ? render : () => { markTab(activeTab); render(); });
 });
+
+/* The address a tab lives at: #rules for the Rules tab, so its link can be shared and a
+   reload stays on it; the bare page for every other tab, as it always was. */
+function tabUrl(name) {
+  return location.pathname + location.search + (name === "rules" ? "#rules" : "");
+}
 
 /* Which page is showing: a tab's name, or "team-<id>" / "game-<id>" / "draft-hq". */
 function currentViewKey() {
@@ -3927,34 +4129,40 @@ function render() {
   // Re-rendering the SAME view (the trade builder does this on every tap) keeps the
   // scroll position; switching views starts at the top like a page change should.
   window.scrollTo(0, keepScroll ? y : 0);
+  // A #rules-<id> link then lands on its section.
+  if (activeTab === "rules") revealRuleSection();
 }
 
 /* Switching tabs, from the tab bar or from a link inside a page (the home wire's "All
    transactions →"). Either way an open team page, game page or Draft HQ closes, the way the bar
-   always did. On the narrowest phones the bar scrolls sideways (eleven tabs), so the
-   tab switched to is scrolled into view: a link must never land on a tab the bar hides. */
+   always did. On the narrowest phones the bar scrolls sideways (eleven tabs, twelve with
+   Rules), so the tab switched to is scrolled into view: a link must never land on a tab
+   the bar hides. */
 function showTab(name) {
   const from = currentViewKey(), fromTab = activeTab;
   viewTeamId = null;
   viewGameId = null;
   viewDraftHq = false;
-  try { history.replaceState(null, "", location.pathname + location.search); } catch {}
+  viewRuleId = null; // a section link not drawn yet is dropped, never kept for a later visit
+  try { history.replaceState(null, "", tabUrl(name)); } catch {}
+  if (name === "rules" && fromTab !== "rules") tabBeforeRules = fromTab;
   activeTab = name;
   // The bar's highlight moves inside the transition, so the old frame still shows the old tab.
-  const update = () => {
-    for (const b of document.querySelectorAll(".tab")) {
-      const on = b.dataset.tab === name;
-      b.classList.toggle("active", on);
-      b.setAttribute("aria-selected", String(on));
-      if (on) revealTab(b);
-    }
-    render();
-  };
+  const update = () => { markTab(name); render(); };
   if (from === name) { update(); return; } // the tab already showing: a plain re-render
   // A tab tapped from a team / game page: its own tab closes the page (the reverse
   // morph when it opened from there); any other tab slides in by bar order.
   if (from !== fromTab && name === fromTab) fxClose(from, update);
   else fxGo(fxTabDirection(fromTab, name), update);
+}
+/* The bar's highlight on one tab, scrolled into view if the bar has it out of sight. */
+function markTab(name) {
+  for (const b of document.querySelectorAll(".tab")) {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+    if (on) revealTab(b);
+  }
 }
 function revealTab(btn) {
   const bar = btn.parentNode;
@@ -4374,7 +4582,9 @@ async function load() {
   applyBranding(DATA.leagueName);
   try { mountCrest(document, typeof Image === "function" ? Image : null, "logo/crest-120.png"); } catch {}
   document.getElementById("week-chip").textContent = DATA.weekLabel || "—";
+  syncRulesTab();
   routeFromHash();
+  if (activeTab !== "home") markTab(activeTab); // a #rules link: the page opens on the tab
   render();
 }
 
