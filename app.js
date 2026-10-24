@@ -1631,6 +1631,164 @@ function renderNews(view) {
   view.appendChild(el("div", "news-disclaimer", "League insiders are AI-generated parody personalities built from this league's real synced data. Not real people posting, not real reporting."));
 }
 
+/* ---------- Trade queue ----------
+   Above the builder: every trade sent to the committee that's still live, and this
+   season's finished ones, from site.json's tradeQueue (the bot's tradeQueueStore.ts),
+   newest first. Counts only, never who voted or proposed: the vote channel is private on
+   purpose. An approved trade turns "Done in Madden" once a sync shows its players moved;
+   a picks-only one can't be seen in EA's data, so it stays "make it in Madden". Linked as
+   #trade-queue. An older site.json without the field shows no queue at all. */
+
+const TQ_FINISHED_SHOWN = 3; // done / denied cards drawn before "Show more"
+const tradeQueueView = { showAll: false }; // transient, survives re-renders but not reloads
+
+/* Each status's pill and the time its card counts from. */
+const TQ_STATUS = {
+  voting: { label: "Voting", verb: "submitted", at: "submittedAt" },
+  approved: { label: "Approved — make it in Madden", verb: "approved", at: "decidedAt" },
+  done: { label: "Done in Madden", verb: "done", at: "doneAt" },
+  denied: { label: "Denied", verb: "denied", at: "decidedAt" },
+};
+
+/* The trades to draw, less any row the page couldn't draw; null when site.json predates the queue. */
+function tradeQueueTrades() {
+  const q = DATA && DATA.tradeQueue;
+  if (!q || !Array.isArray(q.trades)) return null;
+  return q.trades.filter((t) => t && Object.prototype.hasOwnProperty.call(TQ_STATUS, t.status) && t.teamA && t.teamB);
+}
+
+function tradeQueueOpen(t) { return t.status === "voting" || t.status === "approved"; }
+
+/* "submitted 2h ago", from the time the status counts from; "" when that time is missing
+   or unreadable (a vote already open when the queue began has no submitted time). */
+function tradeQueueWhen(t) {
+  const s = TQ_STATUS[t.status];
+  const iso = t[s.at];
+  if (typeof iso !== "string" || !isFinite(new Date(iso).getTime())) return "";
+  return `${s.verb} ${timeAgo(iso)} ago`;
+}
+
+/* The status pill. A live vote shows its counts against the bar, "Voting — ✅ 2 · ❌ 1 of 3",
+   with the same read out in words for a screen reader. */
+function tradeQueuePill(t) {
+  const pill = el("span", "tq-pill");
+  if (t.status !== "voting") {
+    pill.textContent = TQ_STATUS[t.status].label;
+    return pill;
+  }
+  const yes = Number(t.approveCount) || 0, no = Number(t.rejectCount) || 0;
+  const bar = Number(t.quorum) || Number(DATA.tradeQueue.quorum) || 0;
+  pill.textContent = `Voting — ✅ ${yes} · ❌ ${no}` + (bar ? ` of ${bar}` : "");
+  // role=img so the label is read in place of the emoji (a plain span's aria-label isn't).
+  pill.setAttribute("role", "img");
+  pill.setAttribute("aria-label", `Voting: ${yes} to approve, ${no} to reject` + (bar ? `, first side to ${bar} decides it` : ""));
+  return pill;
+}
+
+/* A player the trade sends: as he was when it was submitted. If he's still in the league
+   under that name his card opens on a tap and his portrait shows; a player who has left,
+   or a rosterId EA has handed to someone else, is just the name the trade named. */
+function tradeQueuePlayer(a, teamId) {
+  const now = typeof a.id === "number" ? playerById(a.id) : null;
+  const live = now && now.p.name === a.name ? now.p : null;
+  const line = el("div", "tx-player");
+  if (live) logTappable(line, () => openPlayerCard(a.id));
+  line.appendChild(avatar({ name: a.name || "?", teamId: teamId ?? -1, portraitId: live ? live.portraitId : null }, "tx-av"));
+  const who = el("div", "tx-player-who");
+  who.appendChild(el("div", "tx-player-name", a.name || "Unknown player"));
+  who.appendChild(el("div", "tx-player-sub", a.pos || "—"));
+  line.appendChild(who);
+  const ovr = el("div", "tx-ovr");
+  ovr.appendChild(el("div", "tx-ovr-val", a.ovr != null ? String(a.ovr) : "—"));
+  ovr.appendChild(el("div", "tx-ovr-label", "OVR"));
+  line.appendChild(ovr);
+  return line;
+}
+
+/* A pick the trade sends, labelled the builder's way, with the draft it was stamped for. */
+function tradeQueuePick(a) {
+  const year = a.year != null ? String(a.year) : YEAR_WORDS[a.yearOffset] || "";
+  return el("div", "tq-pick", "🎟 " + pickText(a.round, a.slot, year));
+}
+
+/* One team and what it receives. */
+function tradeQueueSide(side) {
+  const t = team(side.teamId);
+  const abbr = t.abbr !== "?" ? t.abbr : String(side.abbr || "?");
+  const wrap = el("div", "tx-side");
+  wrap.style.setProperty("--rail", railColor(abbr));
+  const head = el("div", "tx-side-head");
+  head.appendChild(logoImg(abbr, "tx-side-logo"));
+  head.appendChild(el("span", "tx-side-team", `${t.abbr !== "?" ? t.nick : abbr} receive`));
+  wrap.appendChild(head);
+  let drawn = 0;
+  for (const a of Array.isArray(side.gets) ? side.gets : []) {
+    if (!a) continue;
+    if (a.kind === "player") wrap.appendChild(tradeQueuePlayer(a, side.teamId));
+    else if (a.kind === "pick") wrap.appendChild(tradeQueuePick(a));
+    else continue;
+    drawn++;
+  }
+  if (!drawn) wrap.appendChild(el("div", "tx-none", "Nothing"));
+  return wrap;
+}
+
+function tradeQueueCard(t) {
+  const card = el("div", "card tq-card tq-" + t.status);
+  const head = el("div", "tq-head");
+  head.appendChild(tradeQueuePill(t));
+  const when = tradeQueueWhen(t);
+  if (when) head.appendChild(el("span", "tx-when", when));
+  card.appendChild(head);
+  const sides = el("div", "tx-sides");
+  sides.appendChild(tradeQueueSide(t.teamA));
+  sides.appendChild(tradeQueueSide(t.teamB));
+  card.appendChild(sides);
+  return card;
+}
+
+/* The queue: every live trade, and the finished ones a few at a time. */
+function renderTradeQueue(view) {
+  const trades = tradeQueueTrades();
+  if (!trades) return;
+  const wrap = el("section", "tq");
+  wrap.id = "trade-queue";
+  const voting = trades.filter((t) => t.status === "voting").length;
+  const toMake = trades.filter((t) => t.status === "approved").length;
+  wrap.appendChild(sectionHead("Trade Queue", [voting ? `${voting} voting` : "", toMake ? `${toMake} to make in Madden` : ""].filter(Boolean).join(" · ")));
+  if (!trades.length) {
+    const card = el("div", "card");
+    card.appendChild(el("div", "empty", "Nothing in the queue. A trade sent to the committee shows up here with its vote."));
+    wrap.appendChild(card);
+    view.appendChild(wrap);
+    return;
+  }
+  let finished = 0;
+  const shown = trades.filter((t) => tradeQueueOpen(t) || tradeQueueView.showAll || finished++ < TQ_FINISHED_SHOWN);
+  const list = el("div", "grid tq-list");
+  for (const t of shown) list.appendChild(tradeQueueCard(t));
+  wrap.appendChild(list);
+  const hidden = trades.length - shown.length;
+  if (hidden > 0) {
+    const more = el("button", "rail-more tq-more", `Show ${hidden} more decided trade${hidden === 1 ? "" : "s"}`);
+    more.type = "button";
+    more.addEventListener("click", () => { tradeQueueView.showAll = true; render(); });
+    wrap.appendChild(more);
+  }
+  view.appendChild(wrap);
+}
+
+/* A #trade-queue link, once the Trade tab is drawn: the queue scrolled to the top of the
+   window (its scroll-margin-top keeps it clear of the sticky bars). Once per link: a
+   later re-render of the tab, a tap in the builder, stays where the member scrolled to. */
+function revealTradeQueue() {
+  const wanted = viewTradeQueue;
+  viewTradeQueue = false;
+  if (!wanted) return;
+  const q = document.getElementById("trade-queue");
+  if (q && typeof q.scrollIntoView === "function") q.scrollIntoView({ block: "start" });
+}
+
 /* ---------- Trade builder ----------
    Builds a trade from the rosters already in site.json and encodes it as an
    `FO1.` code — the SAME format src/discord/tradeCode.ts decodes. No server:
@@ -1686,7 +1844,11 @@ function draftYearOption(offset) {
 }
 function pickChipLabel(p) {
   const [round, slot, yr] = p;
-  return `${round}${["st","nd","rd"][round-1] || "th"} rd${slot ? ` (${round}.${String(slot).padStart(2,"0")})` : ""} · ${draftYearWord(yr)}`;
+  return pickText(round, slot, draftYearWord(yr));
+}
+/* "1st rd (1.05) · 2028": a pick as the builder's chips and the trade queue both show it. */
+function pickText(round, slot, year) {
+  return `${round}${["st","nd","rd"][round-1] || "th"} rd${slot ? ` (${round}.${String(slot).padStart(2,"0")})` : ""} · ${year}`;
 }
 
 /* Where a player is now, for explaining why he left a saved trade. */
@@ -1846,6 +2008,7 @@ function renderTradeSide(container, sideKey) {
 }
 
 function renderTrade(view) {
+  renderTradeQueue(view);
   if (!DATA.rosters) {
     view.appendChild(el("div", "empty", "Trade data isn't in this site version yet — it appears after the next league sync."));
     return;
@@ -4025,6 +4188,8 @@ let viewDraftHq = false; // the league-wide Draft HQ page
 let viewGameId = null; // non-null = a game page (#game-<scheduleId>) is open over the current tab
 let viewRuleId = null; // a #rules-<id> link's section, scrolled to once the Rules tab is drawn
 let tabBeforeRules = "home"; // the tab showing before the Rules tab took over, for Back off a #rules link
+let viewTradeQueue = false; // a #trade-queue link: the queue scrolled to once the Trade tab is drawn
+let tabBeforeTradeQueue = null; // the tab a #trade-queue link took the Trade tab over from, for Back off it; null while the Trade tab is the member's own pick
 const teamSort = { col: "ovr", dir: -1 }; // roster table sort state, survives re-renders
 const needsView = { sort: "need", open: null }; // draft board: sort mode + which group is expanded
 let scoreWeek = null; // "stage-week" key of a past week being browsed on Home, null = current week
@@ -4070,7 +4235,8 @@ function closeGame(viaHistory) {
 }
 /* The page a URL fragment names: #team-<id>, #game-<scheduleId> (the link the Discord
    matchup breakdown posts), or #draft; or the tab, #rules / #rules-<id> (the links bot
-   posts put where arguments start). Read on load and on every back / forward. */
+   posts put where arguments start) or #trade-queue (the Trade tab at its queue). Read on
+   load and on every back / forward. */
 function routeFromHash() {
   const hash = location.hash || "";
   const team = hash.match(/^#team-(\d+)$/);
@@ -4079,16 +4245,34 @@ function routeFromHash() {
   viewGameId = game ? Number(game[1]) : null;
   viewDraftHq = hash === "#draft";
   const rules = rulesRoute(hash);
+  const queue = hash === "#trade-queue";
   viewRuleId = null;
+  viewTradeQueue = false;
   if (rules) {
     // A league without rules has no Rules tab: its link opens Home.
     if (!hasRules()) { activeTab = "home"; return; }
-    if (activeTab !== "rules") tabBeforeRules = activeTab;
+    // Over a Trade tab a #trade-queue link opened, the tab before is the one under that link.
+    if (activeTab !== "rules") tabBeforeRules = activeTab === "trade" && tabBeforeTradeQueue !== null ? tabBeforeTradeQueue : activeTab;
     activeTab = "rules";
     viewRuleId = rules.section;
+  } else if (queue) {
+    // The Trade tab, at the queue. Taken over from the Rules tab, the tab before is the
+    // one under that, so Back to the bare address lands where the member was before any link.
+    // When that is the Trade tab itself (Trade tapped, then a Rules link), Trade is still
+    // the member's own pick: null, as for the link followed from Trade.
+    if (activeTab !== "trade") {
+      const under = activeTab === "rules" ? tabBeforeRules : activeTab;
+      tabBeforeTradeQueue = under === "trade" ? null : under;
+    }
+    activeTab = "trade";
+    viewTradeQueue = true;
   } else if (activeTab === "rules" && !team && !game && !viewDraftHq) {
     // Back off a #rules link onto the bare address: the tab that was showing before it.
     activeTab = tabBeforeRules;
+  } else if (activeTab === "trade" && tabBeforeTradeQueue !== null && !team && !game && !viewDraftHq) {
+    // Back off a #trade-queue link onto the bare address, the same way.
+    activeTab = tabBeforeTradeQueue;
+    tabBeforeTradeQueue = null;
   }
 }
 window.addEventListener("popstate", () => {
@@ -4100,9 +4284,11 @@ window.addEventListener("popstate", () => {
 });
 
 /* The address a tab lives at: #rules for the Rules tab, so its link can be shared and a
-   reload stays on it; the bare page for every other tab, as it always was. */
+   reload stays on it; #trade-queue for a Trade tab a #trade-queue link opened, so closing
+   a page over it keeps the link's address; the bare page for every other tab, as it
+   always was. */
 function tabUrl(name) {
-  return location.pathname + location.search + (name === "rules" ? "#rules" : "");
+  return location.pathname + location.search + (name === "rules" ? "#rules" : name === "trade" && tabBeforeTradeQueue !== null ? "#trade-queue" : "");
 }
 
 /* Which page is showing: a tab's name, or "team-<id>" / "game-<id>" / "draft-hq". */
@@ -4129,8 +4315,9 @@ function render() {
   // Re-rendering the SAME view (the trade builder does this on every tap) keeps the
   // scroll position; switching views starts at the top like a page change should.
   window.scrollTo(0, keepScroll ? y : 0);
-  // A #rules-<id> link then lands on its section.
+  // A #rules-<id> link then lands on its section, a #trade-queue link on the queue.
   if (activeTab === "rules") revealRuleSection();
+  if (activeTab === "trade") revealTradeQueue();
 }
 
 /* Switching tabs, from the tab bar or from a link inside a page (the home wire's "All
@@ -4144,8 +4331,13 @@ function showTab(name) {
   viewGameId = null;
   viewDraftHq = false;
   viewRuleId = null; // a section link not drawn yet is dropped, never kept for a later visit
+  viewTradeQueue = false; // and so is a queue link's scroll
+  // A tapped tab is the member's own pick, not a link's. Trade tapped on a Trade tab a
+  // #trade-queue link opened stays that link, the way Rules tapped again stays #rules.
+  const underQueue = tabBeforeTradeQueue;
+  if (!(name === "trade" && fromTab === "trade")) tabBeforeTradeQueue = null;
   try { history.replaceState(null, "", tabUrl(name)); } catch {}
-  if (name === "rules" && fromTab !== "rules") tabBeforeRules = fromTab;
+  if (name === "rules" && fromTab !== "rules") tabBeforeRules = fromTab === "trade" && underQueue !== null ? underQueue : fromTab;
   activeTab = name;
   // The bar's highlight moves inside the transition, so the old frame still shows the old tab.
   const update = () => { markTab(name); render(); };

@@ -1454,6 +1454,32 @@ a.card:active { background: var(--surface-2); }
   .tx-sides { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 }
 
+/* ---------- Trade queue (the top of the Trade tab, #trade-queue) ----------
+   One card per trade sent to the committee: a status pill, when, then each team and what
+   it receives, drawn as the Transactions tab's trade blocks so a trade reads the same in
+   both. Nothing moves: a #trade-queue link only scrolls. */
+.tq { scroll-margin-top: calc(74px + env(safe-area-inset-top)); }
+.tq-card { padding: 10px 14px 12px; }
+.tq-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 8px; }
+.tq-pill {
+  display: inline-flex; align-items: center; max-width: 100%;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-size: 11px; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim);
+}
+/* A live vote in the trade gold; approved in red, since it still needs a commissioner in Madden. */
+.tq-voting .tq-pill { color: var(--gold); background: rgba(184,134,11,.13); }
+.tq-approved .tq-pill { color: var(--red); background: rgba(208,10,16,.08); }
+.tq-done .tq-pill { color: var(--up); background: rgba(18,138,77,.12); }
+.tq-denied .tq-pill { color: var(--down); background: rgba(201,58,42,.1); }
+.tq-pick { padding: 5px 10px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+@media (min-width: 900px) {
+  .tq { scroll-margin-top: 128px; }
+  .tq-list { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tq-card { padding: 12px 18px 14px; }
+}
+
 /* ---------- Game page (#game-<scheduleId>) ----------
    The front page's billboard for the header, the matchup panel's tale-of-the-tape rows
    for the side-by-side numbers, and the team page's card and label voice for the rest.
