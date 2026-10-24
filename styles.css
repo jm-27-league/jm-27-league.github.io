@@ -1518,10 +1518,11 @@ a.card:active { background: var(--surface-2); }
 /* ---------- Trade queue (a drawer over the Trade tab, #trade-queue) ----------
    The tab's top holds only the way in: a "Trade Queue" button with what's open and a red
    count. The queue itself is a drawer from the right, over an overlay, the full width on
-   a phone of 480px or less: one card per trade sent to the committee, a status pill, when,
-   then each team and what it receives, drawn as the Transactions tab's trade blocks so a
-   trade reads the same in both. The drawer slides in and out only for a member who hasn't
-   asked for less motion; with reduced motion it just appears and goes. */
+   a phone of 480px or less: the trades sent to the committee in groups (Needs votes, Make
+   it in Madden, Finished), one compact row each, and a row opens into its card: a status
+   pill, when, then each team and what it receives, drawn as the Transactions tab's trade
+   blocks so a trade reads the same in both. The drawer slides in and out only for a member
+   who hasn't asked for less motion; with reduced motion it just appears and goes. */
 .tq-open {
   display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0;
   margin: 4px 0 2px; padding: 12px 14px;
@@ -1608,7 +1609,70 @@ body.tq-locked { overflow: hidden; }
 @keyframes tq-slide-in { from { transform: translateX(100%); } to { transform: none; } }
 @keyframes tq-slide-out { from { transform: none; } to { transform: translateX(100%); } }
 
-.tq-card { padding: 10px 14px 12px; }
+/* The drawer's groups: Needs votes, Make it in Madden, Finished. Each head is a button
+   that opens and shuts its group, with its count; a group's rows sit close together. */
+.tq-group + .tq-group, .tq-empty + .tq-group { margin-top: 16px; }
+.tq-group-h { font-size: inherit; font-weight: inherit; margin-bottom: 7px; }
+.tq-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
+  padding: 4px 2px; background: none; border: 0; cursor: pointer; text-align: left;
+  font-family: "Archivo", sans-serif; font-size: 11.5px; font-weight: 800; font-stretch: 88%;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--text-dim);
+}
+.tq-group-count {
+  flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-2); color: var(--text-dim);
+  font-size: 11px; letter-spacing: 0; font-variant-numeric: tabular-nums;
+}
+.tq-group-voting .tq-group-count, .tq-group-approved .tq-group-count { background: var(--red); color: #fff; }
+.tq-group-head::after {
+  content: ""; flex: none; width: 7px; height: 7px; margin: -3px 4px 0 auto;
+  border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint);
+  transform: rotate(45deg);
+}
+.tq-group-head[aria-expanded="true"]::after { margin-top: 3px; transform: rotate(-135deg); }
+.tq-group-head:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+.grid.tq-list { gap: 7px; }
+.tq-empty { padding: 14px 4px; font-size: 13px; line-height: 1.45; color: var(--text-faint); text-align: center; }
+/* Read out, never seen ("Lions and 49ers"; the arrow between them is for the eye). */
+.tq-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* A trade's row: both teams and its pill on the first line, what each gets (cut to the
+   line) and how long ago on the second. The whole row is the button that opens its card,
+   and stays as the card's head once it's open. */
+.tq-card { position: relative; }
+.tq-row {
+  display: grid; gap: 4px; width: 100%; min-width: 0;
+  padding: 10px 14px; background: none; border: 0; cursor: pointer;
+  font-family: inherit; color: inherit; text-align: left;
+}
+.tq-row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tq-row-teams {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-stretch: 88%; font-size: 14px;
+}
+.tq-row-team { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tq-row-logo { width: 20px; height: 20px; flex: none; }
+.tq-row-swap { flex: none; padding: 0 1px; color: var(--text-faint); font-weight: 600; }
+.tq-row .tq-row-pill { display: inline-block; flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A chevron: the row opens downward. */
+.tq-row-top::after {
+  content: ""; flex: none; width: 6px; height: 6px; margin: -3px 2px 0 0;
+  border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint);
+  transform: rotate(45deg);
+}
+.tq-row[aria-expanded="true"] .tq-row-top::after { margin-top: 3px; transform: rotate(-135deg); }
+.tq-row-bottom { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; color: var(--text-dim); }
+.tq-row-gets { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tq-row-when { flex: none; font-size: 11px; color: var(--text-faint); }
+.tq-row:focus-visible { outline: 2px solid var(--red-bright); outline-offset: -2px; border-radius: var(--radius); }
+@media (hover: hover) { .tq-row:hover { background: var(--surface-2); } }
+.tq-card.is-open .tq-row { border-bottom: 1px solid var(--edge); }
+.tq-body { padding: 10px 14px 12px; }
 .tq-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 8px; }
 .tq-pill {
   display: inline-flex; align-items: center; max-width: 100%;
@@ -1626,6 +1690,17 @@ body.tq-locked { overflow: hidden; }
 .tq-cancelled .tq-pill { color: var(--text-dim); background: var(--surface-2); }
 .tq-pick { padding: 5px 10px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .tq-more { margin-top: 4px; }
+
+/* An open live vote's Remind voters, for any member: the button, a line on what it does or
+   on the wait for the next one, and the last word on a reminder sent. */
+.tq-remind { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--edge); display: grid; gap: 6px; justify-items: start; }
+/* #7a5f00, a darker trade gold: --gold on the button's --surface-2 was ~2.85:1 at 12.5px. */
+.tq-act.tq-remind-btn { color: #7a5f00; border-color: rgba(184,134,11,.4); }
+.tq-remind-note { font-size: 11.5px; line-height: 1.45; color: var(--text-faint); overflow-wrap: anywhere; }
+.tq-remind-status { font-size: 12px; line-height: 1.45; color: var(--text-dim); overflow-wrap: anywhere; }
+.tq-remind-status:empty { display: none; }
+.tq-remind-status.is-done { color: var(--up); font-weight: 700; }
+.tq-remind-status.is-failed, .tq-remind-status.is-refused { color: var(--down); }
 
 /* A card's Commissioner control: a small disclosure under the sides. The author display
    values below beat the browser's own [hidden] rule, so each part says it again. */
@@ -1661,19 +1736,22 @@ body.tq-locked { overflow: hidden; }
   background: var(--surface-2); color: var(--text); border: 1px solid var(--edge);
   font-family: "Archivo", sans-serif; font-weight: 800; font-size: 12.5px;
 }
-.tq-act-approve { color: var(--up); border-color: rgba(18,138,77,.35); }
-.tq-act-deny, .tq-act-cancel { color: var(--down); border-color: rgba(201,58,42,.35); }
+/* Darker than --up and --down, which on the buttons' --surface-2 were ~3.9:1 and ~4.5:1 at
+   12.5px: #0e7440 is ~5.1:1, #b53322 ~5.3:1. */
+.tq-act-approve { color: #0e7440; border-color: rgba(18,138,77,.35); }
+.tq-act-deny, .tq-act-cancel { color: #b53322; border-color: rgba(201,58,42,.35); }
 .tq-act.tq-yes { background: var(--red); color: #fff; border-color: var(--red); }
-.tq-act:disabled { opacity: .5; cursor: default; }
+.tq-act:disabled, .tq-act[aria-disabled="true"] { opacity: .5; cursor: default; }
 .tq-act:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
 .tq-confirm { padding: 10px 12px; background: #fff8f8; border: 1px solid rgba(208,10,16,.25); border-radius: 8px; }
 .tq-confirm-ask { font-size: 13px; line-height: 1.45; margin-bottom: 8px; overflow-wrap: anywhere; }
 .tq-admin-status { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text-dim); overflow-wrap: anywhere; }
 .tq-admin-status:empty { display: none; }
 .tq-admin-status.is-done { color: var(--up); font-weight: 700; }
-.tq-admin-status.is-failed, .tq-admin-status.is-timeout, .tq-admin-status.is-invalid { color: var(--down); }
+.tq-admin-status.is-failed, .tq-admin-status.is-timeout, .tq-admin-status.is-invalid, .tq-admin-status.is-refused { color: var(--down); }
 @media (min-width: 900px) {
-  .tq-card { padding: 12px 18px 14px; }
+  .tq-row { padding: 11px 18px; }
+  .tq-body { padding: 12px 18px 14px; }
 }
 
 /* ---------- Game page (#game-<scheduleId>) ----------

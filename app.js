@@ -1631,32 +1631,153 @@ function renderNews(view) {
   view.appendChild(el("div", "news-disclaimer", "League insiders are AI-generated parody personalities built from this league's real synced data. Not real people posting, not real reporting."));
 }
 
+/* ---------- The league relay's answers ----------
+   Since 2026-10-24 the relay (cloudflare/worker.js) waits a few seconds for the bot's own
+   answer to the line it posted. The bot reacts to each line in its private inbox, ✅ done or
+   ❌ refused with a reason beside it, and the relay reads the reactions back: { ok: true,
+   result: "done" }, { ok: true, result: "refused", reason } or { ok: true, result:
+   "pending" } (no answer in time; an older relay's plain { ok: true } reads the same). Cory,
+   the same day: "Cancelling trade isn't working". His cancels had worked, but the page only
+   said "sent" and nothing on it changed for two minutes, so he tried again and was refused
+   as already cancelled. So the page says what the bot said, at once, and claims no more
+   than "sent" when it hasn't said. Every refusal reason has words for each kind of request
+   (a trade submitted, a commissioner's action, a reminder), here in one table; a reason
+   this page doesn't know reads as "error". The words name no bot: the site is every
+   league's, and so is the bot's name (BOT_PERSONA_NAME). */
+
+const RELAY_REASONS = ["wrong-code", "locked", "already-decided", "unknown-trade", "invalid-trade", "not-in-trade", "trade-limit", "busy", "cooldown", "disabled", "error"];
+// done: what a done request says. refused: by reason, one string for every kind, or one
+// per kind (submit, override, remind). A function gets { team } (the side a trade was
+// submitted for, by nickname) or { action } (a commissioner's).
+const RELAY_TEXT = {
+  done: {
+    submit: "Submitted — it's up for a vote now. It shows on the Trade Queue a minute or two later (reload this page to see it there).",
+    override: ({ action }) => ({ approve: "Approved ✓", deny: "Denied ✓", cancel: "Cancelled ✓" })[action] || "Done ✓",
+    remind: "Reminder sent to the trade committee.",
+  },
+  refused: {
+    "wrong-code": "That code isn't right — 5 wrong tries in an hour lock this for an hour.",
+    locked: {
+      submit: "Trades from the site are locked right now — copy the trade code below and use /trade import in Discord.",
+      override: "Overrides are locked for an hour after 5 wrong codes. /trade-admin in Discord needs no code.",
+      remind: "Reminders from the site are locked right now — use /trade remind in Discord.",
+    },
+    // A trade (the same one, sent from the site) is turned away for half an hour whatever
+    // became of it, as well as while it's up for a vote (siteSubmit.ts). An action or a
+    // reminder turned away as decided or gone is drawn as the trade is once site.json
+    // catches up (tqSend, tqSendRemind): a reload sooner shows the same old site.json.
+    "already-decided": {
+      submit: "That exact trade was already sent in the last 30 minutes, or is up for a vote now — check the Trade Queue.",
+      override: "That trade was already decided or cancelled — the site catches up in a minute or two.",
+      remind: "That vote's already decided — the site catches up in a minute or two.",
+    },
+    "unknown-trade": {
+      submit: "That trade isn't open any more — reload.",
+      override: "That trade isn't open any more — the site catches up in a minute or two.",
+      remind: "That trade isn't open any more — the site catches up in a minute or two.",
+    },
+    "invalid-trade": {
+      submit: ({ team }) => `The bot couldn't file it — the reason goes by DM to whoever claimed the ${team} in Discord.`,
+      override: "The bot couldn't do that to this trade — reload to see where it stands.",
+      remind: "The bot couldn't remind voters about this trade — reload to see where it stands.",
+    },
+    "not-in-trade": "That team isn't one of the two in this trade — choose your side again.",
+    "trade-limit": "A team in this trade has used up its trades for the season.",
+    busy: {
+      submit: "The site has sent its most trades for this hour — try again later, or copy the trade code below.",
+      override: "The bot's busy with a burst of requests — try again in a minute.",
+      remind: "The bot's busy with a burst of requests — try again in a minute.",
+    },
+    cooldown: {
+      submit: "Too soon after the last one — try again in a few minutes.",
+      override: "Too soon after the last one — try again in a few minutes.",
+      remind: "Voters were reminded in the last 6 hours — the next reminder can go once that's up.",
+    },
+    // Off for one of two reasons the bot answers alike: the site's inbox switched off (a
+    // page loaded before the switch still has its buttons), when /trade import and /trade
+    // remind in Discord still work; or no trade committee channel, when they're turned
+    // away too. An action is off with no commissioner code set, or the inbox off, and
+    // /trade-admin needs neither.
+    disabled: {
+      submit: "Trades from the site are switched off right now — copy the trade code below for /trade import in Discord. If that's turned away too, a commissioner needs to set the trade committee channel (/settings trade-committee-channel).",
+      override: "Overrides from the site are switched off right now — use /trade-admin in Discord.",
+      remind: "Reminders from the site are switched off right now — try /trade remind in Discord. If that's turned away too, a commissioner needs to set the trade committee channel (/settings trade-committee-channel).",
+    },
+    error: {
+      submit: "Something went wrong on the bot's side — try again in a minute, or copy the trade code below.",
+      override: "Something went wrong on the bot's side — check the audit log in Discord before trying again.",
+      remind: "Something went wrong on the bot's side — try again in a minute, or use /trade remind in Discord.",
+    },
+  },
+};
+
+/* The bot's answer from a relay reply: "done", "refused" with its reason (one this page
+   knows, else "error"), or "pending". Only a successful { ok: true } is an answer at all. */
+function relayAnswer(res, out) {
+  if (!(res && res.ok && out && out.ok === true)) return null;
+  if (out.result === "done") return { result: "done", reason: null };
+  if (out.result === "refused") return { result: "refused", reason: RELAY_REASONS.includes(out.reason) ? out.reason : "error" };
+  return { result: "pending", reason: null };
+}
+
+/* The words for a done or refused answer, for this kind of request. */
+function relayText(kind, answer, ctx) {
+  const entry = answer.result === "done" ? RELAY_TEXT.done : RELAY_TEXT.refused[answer.reason];
+  const words = typeof entry === "string" ? entry : entry[kind];
+  return typeof words === "function" ? words(ctx || {}) : words;
+}
+
 /* ---------- Trade queue ----------
    Every trade sent to the committee that's still live, and this season's finished ones,
    from site.json's tradeQueue (the bot's tradeQueueStore.ts), newest first. Counts only,
    never who voted or proposed: the vote channel is private on purpose. An approved trade
    turns "Done in Madden" once a sync shows its players moved; a picks-only one can't be
    seen in EA's data, so it stays "make it in Madden". A commissioner can decide or cancel
-   a trade from its card ("Trade queue: commissioner overrides", below). An older site.json
-   without the field shows no queue at all.
+   a trade from its card ("Trade queue: commissioner overrides", below), and any member
+   can remind the committee about a live vote ("Trade queue: reminders"). An older
+   site.json without the field shows no queue at all.
 
    In a side drawer since 2026-10-24 (Cory: "pending trades shouldn't be up top, have a
    trade queue in a side drawer"): a "Trade Queue" button heads the Trade tab, counting
    what's still open (live votes, and approved trades not yet made in Madden), and opens
-   the drawer over the page. Linked as #trade-queue: the Trade tab with the drawer open. */
+   the drawer over the page. Linked as #trade-queue: the Trade tab with the drawer open.
 
-const TQ_FINISHED_SHOWN = 3; // done / denied / cancelled cards drawn before "Show more"
+   In groups of compact rows since the same day (Cory: "If we have every trade accepted,
+   cancelled, etc on there without dropdowns or something it will be very full very
+   quickly"): Needs votes, then Make it in Madden, both open, then Finished (done, denied,
+   cancelled, and a status the page doesn't know yet), shut until it's opened and ten at a
+   time. Each trade is one row (both teams, what each gets cut to a line, its pill, how
+   long ago) that opens into its full card; a card's buttons are only in the open card. */
+
+const TQ_FINISHED_STEP = 10; // finished trades drawn at a time, before "Show more"
 const TQ_LEAVE_MS = 180; // the drawer's slide out, with motion (styles.css .tq-leaving)
 const TQ_BACK_GRACE_MS = 1000; // a close that went Back and never landed closes in place after this
-const tradeQueueView = { showAll: false }; // transient, survives re-renders but not reloads
+// Transient, survives re-renders and the drawer shut and opened again, but not reloads:
+// which groups are open, how many finished rows show, and which trades' cards are open.
+const tradeQueueView = { open: { voting: true, approved: true, finished: false }, finishedShown: TQ_FINISHED_STEP, expanded: new Set() };
+
+/* The drawer's groups, in order. A status the page doesn't know yet goes with the finished
+   ones: it isn't counted as open, either. */
+const TQ_GROUPS = [
+  { id: "voting", title: "Needs votes", has: (t) => t.status === "voting" },
+  { id: "approved", title: "Make it in Madden", has: (t) => t.status === "approved" },
+  { id: "finished", title: "Finished", has: (t) => !tradeQueueOpen(t) },
+];
+function tradeQueueGroupOf(t) { return TQ_GROUPS.find((g) => g.has(t)).id; }
+
+/* A trade's key in the drawer: its id when the site can name it by one, else its place in
+   the queue ("#" can't be in an id the site sends, so the two never meet). */
+function tqCardKey(t, i) {
+  return typeof t.id === "string" && /^[\w-]{1,64}$/.test(t.id) ? t.id : "#" + i;
+}
 
 /* Each status's pill, the pill when a commissioner decided it, and the time its card
    counts from. A cancelled trade shows no time: site.json carries none for a cancellation
    (an approved trade's decidedAt is still its approval). */
 const TQ_STATUS = {
   voting: { label: "Voting", verb: "submitted", at: "submittedAt" },
-  approved: { label: "Approved — make it in Madden", commissioner: "Approved by commissioner — make it in Madden", verb: "approved", at: "decidedAt" },
-  done: { label: "Done in Madden", verb: "done", at: "doneAt" },
+  approved: { label: "Approved — make it in Madden", commissioner: "Approved by commissioner — make it in Madden", short: "Approved", verb: "approved", at: "decidedAt" },
+  done: { label: "Done in Madden", short: "Done", verb: "done", at: "doneAt" },
   denied: { label: "Denied", commissioner: "Denied by commissioner", verb: "denied", at: "decidedAt" },
   cancelled: { label: "Cancelled", verb: "cancelled", at: null },
 };
@@ -1736,9 +1857,12 @@ function tradeQueuePlayer(a, teamId) {
 }
 
 /* A pick the trade sends, labelled the builder's way, with the draft it was stamped for. */
-function tradeQueuePick(a) {
+function tradeQueuePickText(a) {
   const year = a.year != null ? String(a.year) : YEAR_WORDS[a.yearOffset] || "";
-  return el("div", "tq-pick", "🎟 " + pickText(a.round, a.slot, year));
+  return pickText(a.round, a.slot, year);
+}
+function tradeQueuePick(a) {
+  return el("div", "tq-pick", "🎟 " + tradeQueuePickText(a));
 }
 
 /* A side's team by its nickname; one the site doesn't know, by the queue's abbreviation. */
@@ -1769,46 +1893,157 @@ function tradeQueueSide(side) {
   return wrap;
 }
 
-/* reg collects what the drawer's redraw carries over: each commissioner control, and the
-   elements keyed for keeping focus (tqKeyed). */
-function tradeQueueCard(t, reg) {
+/* "Lions get Nick Bosa, 1st rd (1.05) · 2028; 49ers get Jahmyr Gibbs": the whole trade on
+   one line, cut to fit (styles.css). */
+function tradeQueueGetsText(t) {
+  return [t.teamA, t.teamB].map((side) => {
+    const items = (Array.isArray(side.gets) ? side.gets : [])
+      .map((a) => (!a ? null : a.kind === "player" ? a.name || "Unknown player" : a.kind === "pick" ? tradeQueuePickText(a) : null))
+      .filter(Boolean);
+    return `${tradeQueueTeamName(side)} get ${items.length ? items.join(", ") : "nothing"}`;
+  }).join("; ");
+}
+
+/* A row's own short pill: a live vote's counts ("✅ 2 · ❌ 1", read out in words), else its
+   status in a word or two. The open card under it has the full pill. */
+function tradeQueueRowPill(t) {
+  const pill = el("span", "tq-pill tq-row-pill");
+  if (t.status === "voting") {
+    const yes = Number(t.approveCount) || 0, no = Number(t.rejectCount) || 0;
+    pill.textContent = `✅ ${yes} · ❌ ${no}`;
+    pill.setAttribute("role", "img");
+    pill.setAttribute("aria-label", `Voting: ${yes} to approve, ${no} to reject`);
+    return pill;
+  }
   const s = tqStatus(t);
-  const card = el("div", "card tq-card tq-" + (s.unknown ? "other" : t.status));
+  pill.textContent = s.short || s.label;
+  return pill;
+}
+
+/* A row's "2h ago", from the time its status counts from; "" without one. */
+function tradeQueueAgo(t) {
+  const s = tqStatus(t);
+  const iso = s.at ? t[s.at] : null;
+  if (typeof iso !== "string" || !isFinite(new Date(iso).getTime())) return "";
+  return `${timeAgo(iso)} ago`;
+}
+
+/* A trade's row, the button that opens and shuts its card: both teams (logo and nickname),
+   what each gets on one line, its pill and how long ago. */
+function tradeQueueRow(t, key, expanded, reg) {
+  const row = tqKeyed(reg, el("button", "tq-row"), key + ":row");
+  row.type = "button";
+  row.setAttribute("aria-expanded", String(expanded));
+  if (expanded) row.setAttribute("aria-controls", "tq-body-" + key);
+  const top = el("span", "tq-row-top");
+  const teams = el("span", "tq-row-teams");
+  [t.teamA, t.teamB].forEach((side, i) => {
+    if (i) {
+      const swap = el("span", "tq-row-swap", "↔");
+      swap.setAttribute("aria-hidden", "true");
+      teams.appendChild(swap);
+      teams.appendChild(el("span", "tq-sr", " and "));
+    }
+    const known = team(side.teamId);
+    const logo = logoImg(known.abbr !== "?" ? known.abbr : String(side.abbr || "?"), "tq-row-logo");
+    logo.alt = ""; // the nickname beside it names the team
+    teams.appendChild(logo);
+    teams.appendChild(el("span", "tq-row-team", tradeQueueTeamName(side)));
+  });
+  top.appendChild(teams);
+  top.appendChild(tradeQueueRowPill(t));
+  row.appendChild(top);
+  const bottom = el("span", "tq-row-bottom");
+  bottom.appendChild(el("span", "tq-row-gets", tradeQueueGetsText(t)));
+  const ago = tradeQueueAgo(t);
+  if (ago) bottom.appendChild(el("span", "tq-row-when", ago));
+  row.appendChild(bottom);
+  row.addEventListener("click", () => {
+    if (tradeQueueView.expanded.has(key)) tradeQueueView.expanded.delete(key);
+    else tradeQueueView.expanded.add(key);
+    paintTradeQueueDrawer();
+  });
+  return row;
+}
+
+/* One trade: its row, and under it, once opened, the full card: the status pill and when,
+   each team and what it receives, and the buttons (Remind voters, Commissioner). reg
+   collects what the drawer's redraw carries over: each control, and the elements keyed for
+   keeping focus (tqKeyed). */
+function tradeQueueCard(t, key, reg) {
+  const s = tqStatus(t);
+  const expanded = tradeQueueView.expanded.has(key);
+  const card = el("div", "card tq-card tq-" + (s.unknown ? "other" : t.status) + (expanded ? " is-open" : ""));
+  card.dataset.tqTrade = key;
+  reg.cards.set(key, card);
+  card.appendChild(tradeQueueRow(t, key, expanded, reg));
+  if (!expanded) return card;
+  const body = el("div", "tq-body");
+  body.id = "tq-body-" + key;
   const head = el("div", "tq-head");
   head.appendChild(tradeQueuePill(t));
   const when = tradeQueueWhen(t);
   if (when) head.appendChild(el("span", "tx-when", when));
-  card.appendChild(head);
+  body.appendChild(head);
   const sides = el("div", "tx-sides");
   sides.appendChild(tradeQueueSide(t.teamA));
   sides.appendChild(tradeQueueSide(t.teamB));
-  card.appendChild(sides);
+  body.appendChild(sides);
+  const remind = tqRemindControl(t, reg);
+  if (remind) body.appendChild(remind);
   const admin = tqAdminControl(t, reg);
-  if (admin) card.appendChild(admin);
+  if (admin) body.appendChild(admin);
+  card.appendChild(body);
   return card;
 }
 
-/* The queue: every live trade, and the finished ones a few at a time. */
+/* A group: its head (a button that opens and shuts it, with its count), then its rows. The
+   finished ones come ten at a time; an open card among them is drawn wherever it falls. */
+function tradeQueueGroup(g, rows, reg) {
+  const wrap = el("div", "tq-group tq-group-" + g.id);
+  const open = Boolean(tradeQueueView.open[g.id]);
+  const h = el("h3", "tq-group-h");
+  const head = tqKeyed(reg, el("button", "tq-group-head"), "group:" + g.id);
+  head.type = "button";
+  head.setAttribute("aria-expanded", String(open));
+  if (open) head.setAttribute("aria-controls", "tq-group-" + g.id);
+  head.appendChild(el("span", "tq-group-title", g.title));
+  head.appendChild(el("span", "tq-group-count", String(rows.length)));
+  head.addEventListener("click", () => { tradeQueueView.open[g.id] = !open; paintTradeQueueDrawer(); });
+  h.appendChild(head);
+  wrap.appendChild(h);
+  if (!open) return wrap;
+  const paged = g.id === "finished";
+  const shown = paged ? rows.filter((r, i) => i < tradeQueueView.finishedShown || tradeQueueView.expanded.has(r.key)) : rows;
+  const list = el("div", "grid tq-list");
+  list.id = "tq-group-" + g.id;
+  for (const r of shown) list.appendChild(tradeQueueCard(r.t, r.key, reg));
+  wrap.appendChild(list);
+  const hidden = rows.length - shown.length;
+  if (hidden > 0) {
+    const n = Math.min(hidden, TQ_FINISHED_STEP);
+    const more = tqKeyed(reg, el("button", "rail-more tq-more", `Show ${n} more finished trade${n === 1 ? "" : "s"}`), "group:finished:more");
+    more.type = "button";
+    more.addEventListener("click", () => { tradeQueueView.finishedShown += TQ_FINISHED_STEP; paintTradeQueueDrawer(); });
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+/* The queue: Needs votes, Make it in Madden, Finished, each only when it has a trade; one
+   quiet line when there's none at all, and one when nothing's open. */
 function tradeQueueSection(trades, reg) {
   const wrap = el("section", "tq");
   wrap.id = "trade-queue";
   if (!trades.length) {
-    const card = el("div", "card");
-    card.appendChild(el("div", "empty", "Nothing in the queue. A trade sent to the committee shows up here with its vote."));
-    wrap.appendChild(card);
+    wrap.appendChild(el("div", "tq-empty", "Nothing in the queue. A trade sent to the committee shows up here with its vote."));
     return wrap;
   }
-  let finished = 0;
-  const shown = trades.filter((t) => tradeQueueOpen(t) || tradeQueueView.showAll || finished++ < TQ_FINISHED_SHOWN);
-  const list = el("div", "grid tq-list");
-  for (const t of shown) list.appendChild(tradeQueueCard(t, reg));
-  wrap.appendChild(list);
-  const hidden = trades.length - shown.length;
-  if (hidden > 0) {
-    const more = el("button", "rail-more tq-more", `Show ${hidden} more decided trade${hidden === 1 ? "" : "s"}`);
-    more.type = "button";
-    more.addEventListener("click", () => { tradeQueueView.showAll = true; paintTradeQueueDrawer(); });
-    wrap.appendChild(more);
+  const rows = trades.map((t, i) => ({ t, key: tqCardKey(t, i) }));
+  if (!trades.some(tradeQueueOpen)) wrap.appendChild(el("div", "tq-empty", "Nothing open right now."));
+  for (const g of TQ_GROUPS) {
+    const mine = rows.filter((r) => g.has(r.t));
+    if (mine.length) wrap.appendChild(tradeQueueGroup(g, mine, reg));
   }
   return wrap;
 }
@@ -1847,7 +2082,7 @@ function tradeQueueButton() {
    motion. It lives outside #view, so a redraw of the page underneath never touches it:
    render() ends by matching it to the route (syncTradeQueueDrawer). */
 
-let tqDrawer = null; // while it shows: { ov, panel, sub, note, body, close, onKey, reg, closing }
+let tqDrawer = null; // while it shows: { ov, panel, sub, note, body, close, onKey, reg, closing, tickTimer }
 
 function focusQuietly(node) {
   if (node && typeof node.focus === "function") { try { node.focus({ preventScroll: true }); } catch {} }
@@ -1915,7 +2150,7 @@ function mountTradeQueueDrawer() {
     }
   };
   document.addEventListener("keydown", onKey);
-  tqDrawer = { ov, panel, sub, note, body, close: x, onKey, reg: null, closing: false };
+  tqDrawer = { ov, panel, sub, note, body, close: x, onKey, reg: null, closing: false, tickTimer: null };
   paintTradeQueueDrawer();
   document.body.appendChild(ov);
   document.body.classList.add("tq-locked");
@@ -1924,9 +2159,10 @@ function mountTradeQueueDrawer() {
   focusQuietly(x);
 }
 
-/* The drawer's contents, drawn again (Show more, a newer queue from a check): where it was
-   scrolled to, the element that had focus, and a commissioner code half-typed all carry
-   over. The code passes from the old field to the new one and nowhere else. */
+/* The drawer's contents, drawn again (a row or group opened, Show more, a newer queue from
+   a check): where it was scrolled to, the element that had focus, and a commissioner code
+   half-typed all carry over. The code passes from the old field to the new one and nowhere
+   else. */
 function paintTradeQueueDrawer() {
   const d = tqDrawer;
   if (!d) return;
@@ -1937,7 +2173,7 @@ function paintTradeQueueDrawer() {
   const typed = new Map();
   if (before) for (const c of before.controls) if (c.pin && c.pin.value) typed.set(c.id, c.pin.value);
   const scrolled = d.body.scrollTop;
-  const reg = { controls: [], keyed: new Map() };
+  const reg = { controls: [], keyed: new Map(), cards: new Map() };
   d.reg = reg;
   const trades = tradeQueueTrades() || [];
   d.sub.textContent = tradeQueueOpenText(trades);
@@ -1946,17 +2182,48 @@ function paintTradeQueueDrawer() {
   d.body.replaceChildren(tradeQueueSection(trades, reg));
   for (const c of reg.controls) if (c.pin && typed.has(c.id)) c.pin.value = typed.get(c.id);
   if (typeof scrolled === "number") d.body.scrollTop = scrolled;
+  tqScheduleTick(d);
   if (inBody) {
-    // The same control in the new drawing, else the drawer itself (Show more is gone once used).
-    const again = focusKey ? reg.keyed.get(focusKey) : null;
-    focusQuietly(again && !again.disabled ? again : d.panel);
+    // The same control in the new drawing; else its trade's row (a control the trade no
+    // longer has, or one that's off now); else the drawer itself (Show more, once used).
+    const cut = focusKey ? focusKey.lastIndexOf(":") : -1;
+    const again = [focusKey, cut > 0 ? focusKey.slice(0, cut) + ":row" : null].map((k) => (k ? reg.keyed.get(k) : null)).find((n) => n && !n.disabled);
+    focusQuietly(again || d.panel);
   }
+}
+
+/* Words in the drawer that move with the clock alone (a Remind voters button's wait, "Reminded
+   2h 36m ago — next reminder in 3h 24m.", and the minute it's held after an answer) are
+   painted again, in place, the moment they change: one timer for the drawer, at the soonest
+   change any drawn control has coming (its nextChange), set again after each. In place, so
+   nothing is drawn away under a tap and no status line is read out again. */
+function tqScheduleTick(d) {
+  if (d.tickTimer != null) { clearTimeout(d.tickTimer); d.tickTimer = null; }
+  const due = d.reg ? d.reg.controls.map((c) => (c.nextChange ? c.nextChange() : null)).filter((ms) => ms !== null) : [];
+  if (!due.length) return;
+  d.tickTimer = setTimeout(() => {
+    if (tqDrawer !== d) return;
+    d.tickTimer = null;
+    tqPaintAdmin();
+    tqScheduleTick(d);
+  }, Math.min(...due));
+}
+
+/* A trade's card brought into the drawer's view once the bot has answered for it: a card
+   that moved to another group (a cancel lands in Finished) is drawn somewhere else, and a
+   card opened again by its answer has its words below the row. Only as far as it takes
+   (nearest), and with no glide for a member who has asked for less motion. */
+function tqBringIntoView(id) {
+  const card = tqDrawer && tqDrawer.reg ? tqDrawer.reg.cards.get(id) : null;
+  if (!card || typeof card.scrollIntoView !== "function") return;
+  try { card.scrollIntoView({ block: "nearest", behavior: fxMotionOK() ? "smooth" : "auto" }); } catch {}
 }
 
 function unmountTradeQueueDrawer() {
   const d = tqDrawer;
   if (!d) return;
   tqDrawer = null;
+  if (d.tickTimer != null) clearTimeout(d.tickTimer);
   document.removeEventListener("keydown", d.onKey);
   document.body.classList.remove("tq-locked");
   // A confirm step doesn't outlive the drawer: the commissioner code typed for it went with it.
@@ -2039,17 +2306,25 @@ function refreshTradeQueue() {
    approved, denied or cancelled, and an approved trade not yet made in Madden cancelled.
    The commissioner code goes with the request to the relay, which signs it into the bot's
    inbox without passing the code on, so only the bot can tell a right code from a wrong
-   one: an answer of { ok: true } only means the request reached the bot. So the card says
-   "Sent — checking…" and reads site.json again, every 10 seconds for two minutes and every
-   30 after that, until the trade's status moves or ten minutes have gone. A right code is
-   slow to show: the bot waits a minute to fold changes into one publish
-   (siteRepublish.ts), longer while a sync runs, and GitHub Pages takes a minute or two
-   more. So the timeout's words send the commissioner to the audit log before another
-   try, and only then suggest a wrong code: five wrong codes in an hour lock overrides
-   for an hour. A trade that leaves the queue altogether (an earlier season's approved trade,
-   cancelled) gets its word in the drawer's head, its card being gone. The code is typed,
-   sent and cleared: never stored, never in the address, never shown. In Discord,
-   /trade-admin does the same with no code (the commissioner role is the proof). */
+   one. Since the relay reads the bot's answer back ("The league relay's answers", above),
+   a done action shows at once: "Cancelled ✓", the card drawn as the trade is now (its pill,
+   its group) with "updating the site…" until site.json says so too, and a refusal says
+   why (a wrong code, the lockout, already decided). Turned away as already decided or no
+   longer open, the card is checked the same way, so it shows what became of the trade as
+   soon as site.json does (an action from another phone, or the other commissioner's): a
+   reload sooner shows the same old site.json. Whatever the answer, the card is opened again
+   if it was shut meanwhile, and brought into view. With no answer in time, the card says
+   "Sent — checking…" and reads site.json again, every 10 seconds for two minutes and
+   every 30 after that, until the trade's status moves or ten minutes have gone; a done
+   action is checked the same way, until the site agrees. A change is slow to show on the
+   site: the bot folds changes into one publish (siteRepublish.ts), longer while a sync
+   runs, and GitHub Pages takes a minute or two more. So the unanswered timeout's words
+   send the commissioner to the audit log before another try, and only then suggest a
+   wrong code: five wrong codes in an hour lock overrides for an hour. A trade that leaves
+   the queue altogether (an earlier season's approved trade, cancelled) gets its word in
+   the drawer's head, its card being gone. The code is typed, sent and cleared: never
+   stored, never in the address, never shown. In Discord, /trade-admin does the same with
+   no code (the commissioner role is the proof). */
 
 const TQ_POLL_MS = 10_000; // how often site.json is read again after a send...
 const TQ_POLL_FAST_FOR_MS = 120_000; // ...for the first two minutes,
@@ -2066,13 +2341,21 @@ const TQ_STILL_TEXT = "Sent — still checking. The site updates a minute or two
 const TQ_TIMEOUT_TEXT = "The site hasn't updated yet. Check the audit log in Discord before trying again. If nothing's there, the commissioner code may be wrong, or overrides are locked after 5 wrong tries in an hour (/trade-admin in Discord needs no code).";
 const TQ_BAD_PIN_TEXT = "Enter the commissioner code: 4 to 8 digits.";
 const TQ_OFFLINE_TEXT = "Couldn't reach the league server — check your connection and try again.";
+const TQ_UPDATING_TEXT = "updating the site…"; // after a done action's words, until site.json agrees
+const TQ_SLOW_SITE_TEXT = "the site hasn't caught up yet — reload in a few minutes.";
 // Transient, like the builder's Submit: survives redraws, never a reload. By trade id:
 // { open: the control showing, confirm: the action waiting on its confirm step, outcome:
-// the last word, { state: "sending" | "checking" | "done" | "timeout" | "failed" | "invalid", message } }.
+// the last word, { state: "sending" | "checking" | "done" | "refused" | "timeout" | "failed" | "invalid", message } }.
 const tqAdmin = new Map();
 let tqAdminInFlight = false; // one request at a time, from any card
-const tqWatch = new Map(); // trade id -> { was: its status when sent, pair: its teams in words, sentAt }
+// trade id -> { was: its status when sent, pair: its teams in words, sentAt, done: for a done
+// action, { words: what it said, expect: the status it made }, refusal: a refusal waiting on
+// the site, its words kept if the site never moves }
+const tqWatch = new Map();
 let tqPollTimer = null;
+// A trade the bot said it acted on, drawn as it is now until site.json moves it: trade id ->
+// { was: its status in site.json when sent, fields: what it is now }.
+const tqLocal = new Map();
 const tqGone = new Map(); // trade id -> the drawer head's word on a watched trade that left the queue
 
 function tqAdminState(id) {
@@ -2281,7 +2564,7 @@ async function tqSend(t, action, pin, toggle) {
   s.outcome = { state: "sending", message: "Sending…" };
   tqPaintAdmin();
   focusQuietly(toggle); // the confirm step it was sent from is gone
-  let outcome;
+  let outcome, answer = null;
   try {
     const res = await fetch(DATA.submitUrl, {
       method: "POST",
@@ -2289,22 +2572,94 @@ async function tqSend(t, action, pin, toggle) {
       body: JSON.stringify({ action, trade: t.id, pin: code }),
     });
     const out = await Promise.resolve().then(() => res.json()).catch(() => null); // an unreadable answer is a refusal without words
-    outcome = res.ok && out && out.ok === true
-      ? { state: "checking", message: TQ_SENT_TEXT }
-      : { state: "failed", message: tqAdminError(out) };
+    answer = relayAnswer(res, out);
+    outcome = !answer ? { state: "failed", message: tqAdminError(out) }
+      : answer.result === "done" ? { state: "done", message: `${relayText("override", answer, { action })} — ${TQ_UPDATING_TEXT}` }
+      : answer.result === "refused" ? { state: "refused", message: relayText("override", answer) }
+      : { state: "checking", message: TQ_SENT_TEXT };
   } catch {
     outcome = { state: "failed", message: TQ_OFFLINE_TEXT };
   }
   tqAdminInFlight = false;
   tqAdminState(t.id).outcome = outcome;
-  if (outcome.state === "checking") tqWatchTrade(t.id, was, tqPairText(t));
-  tqPaintAdmin();
+  if (outcome.state === "checking") tqWatchTrade(t.id, was, tqPairText(t), null);
+  // Turned away as decided or gone: the bot knows what this page's site.json doesn't yet.
+  if (answer && answer.result === "refused" && TQ_SITE_BEHIND.includes(answer.reason)) tqWatchTrade(t.id, was, tqPairText(t), null, true);
+  if (answer && answer.result === "done") {
+    // Drawn as it is now, at once, and checked until site.json agrees.
+    const fields = tqDoneFields(action, was);
+    tqActedOn(t.id, was, fields);
+    tqWatchTrade(t.id, was, tqPairText(t), { words: relayText("override", answer, { action }), expect: fields.status });
+  }
+  // The last word, on its card wherever that is now.
+  tqReveal(t.id);
+  refreshTradeQueue();
+  tqBringIntoView(t.id);
+}
+
+/* The answers that mean the bot has seen the trade move on, and this page's site.json hasn't. */
+const TQ_SITE_BEHIND = ["already-decided", "unknown-trade"];
+
+/* A trade's card open, and the group it's in, for the bot's word on it: the card or its
+   group may have been shut while the request was on its way. */
+function tqReveal(id) {
+  const row = DATA && DATA.tradeQueue && Array.isArray(DATA.tradeQueue.trades) ? DATA.tradeQueue.trades.find((x) => x && x.id === id) : null;
+  if (!row || !tqStatus(row)) return;
+  tradeQueueView.expanded.add(id);
+  tradeQueueView.open[tradeQueueGroupOf(row)] = true;
+}
+
+/* What a done action makes of a trade. A cancelled vote is a commissioner's; a cancelled
+   approved trade keeps how it was approved (tradeQueueStore.ts). */
+function tqDoneFields(action, was) {
+  const now = new Date().toISOString();
+  if (action === "approve") return { status: "approved", decidedBy: "commissioner", decidedAt: now };
+  if (action === "deny") return { status: "denied", decidedBy: "commissioner", decidedAt: now };
+  return was === "voting" ? { status: "cancelled", decidedBy: "commissioner" } : { status: "cancelled" };
+}
+
+/* A trade the bot said it acted on: the page's queue draws it as it is now (tqSend then
+   opens its card in the group it lands in: a cancel lands in Finished, shut by default). */
+function tqActedOn(id, was, fields) {
+  tqLocal.set(id, { was, fields });
+  const row = DATA && DATA.tradeQueue && Array.isArray(DATA.tradeQueue.trades) ? DATA.tradeQueue.trades.find((x) => x && x.id === id) : null;
+  if (row) Object.assign(row, fields);
+}
+
+/* A queue read from site.json, as the page draws it: a trade the bot acted on keeps what
+   it is now while site.json still has it where it was (the bot's publish, and GitHub
+   Pages, are a minute or two behind); once site.json moves it, or drops it, site.json's
+   word is the one. The same for a reminder the bot sent (tqReminded). */
+function tqWithLocal(q) {
+  const ids = new Set(q.trades.map((t) => (t && typeof t.id === "string" ? t.id : null)));
+  for (const id of [...tqLocal.keys()]) if (!ids.has(id)) tqLocal.delete(id);
+  for (const id of [...tqReminded.keys()]) if (!ids.has(id)) tqReminded.delete(id);
+  if (!tqLocal.size && !tqReminded.size) return q;
+  const trades = q.trades.map((t) => {
+    if (!t || typeof t.id !== "string") return t;
+    let row = t;
+    const l = tqLocal.get(t.id);
+    if (l && t.status === l.was) row = { ...row, ...l.fields };
+    else if (l) tqLocal.delete(t.id);
+    const r = tqReminded.get(t.id);
+    if (r && (t.remindedAt ?? null) === r.was) row = { ...row, remindedAt: r.at };
+    else if (r) tqReminded.delete(t.id);
+    return row;
+  });
+  return { ...q, trades };
 }
 
 /* A send to wait on: its first check 10 seconds from now, whatever the checks already
-   running were waiting on. */
-function tqWatchTrade(id, was, pair) {
-  tqWatch.set(id, { was, pair, sentAt: Date.now() });
+   running were waiting on. done: a done action's words and the status it made, checked
+   until the site agrees. refusal: turned away as decided or gone, checked until the site
+   shows what became of it, the refusal's words kept should it never. */
+function tqWatchTrade(id, was, pair, done, refusal = false) {
+  tqWatch.set(id, { was, pair, sentAt: Date.now(), done, refusal });
+  tqPollSoon();
+}
+
+/* The next check 10 seconds from now, whatever the checks already running were waiting on. */
+function tqPollSoon() {
   if (tqPollTimer !== null) { clearTimeout(tqPollTimer); tqPollTimer = null; }
   tqSchedulePoll();
 }
@@ -2313,25 +2668,25 @@ function tqWatchTrade(id, was, pair) {
    site.json is kept, never doubled): in 10 seconds while any send is in its first two
    minutes, else in 30. */
 function tqSchedulePoll() {
-  if (tqPollTimer !== null || !tqWatch.size) return;
+  if (tqPollTimer !== null || (!tqWatch.size && !tqRemindWatch.size)) return;
   const now = Date.now();
-  const fast = [...tqWatch.values()].some((w) => now - w.sentAt < TQ_POLL_FAST_FOR_MS);
+  const fast = [...tqWatch.values(), ...tqRemindWatch.values()].some((w) => now - w.sentAt < TQ_POLL_FAST_FOR_MS);
   tqPollTimer = setTimeout(tqPoll, fast ? TQ_POLL_MS : TQ_POLL_SLOW_MS);
 }
 
 /* One check: site.json read fresh (past every cache, the service worker's and the CDN's),
    and each trade waited on either moved, left the queue, timed out, or waits on. A newer
-   queue replaces the page's and is drawn where it shows. */
+   queue replaces the page's and is drawn where it shows, and a watched trade it moves to
+   another group is brought into view there. */
 async function tqPoll() {
   tqPollTimer = null;
+  const groupWas = new Map([...tqWatch.keys(), ...tqRemindWatch.keys()].map((id) => [id, tqDrawnGroup(id)]));
   let q = null;
   try {
     const res = await fetch("site.json?tq=" + Date.now(), { cache: "no-store" });
     const fresh = res.ok ? await res.json() : null;
     if (fresh && fresh.tradeQueue && Array.isArray(fresh.tradeQueue.trades)) q = fresh.tradeQueue;
   } catch {}
-  const redraw = q !== null && DATA && JSON.stringify(q) !== JSON.stringify(DATA.tradeQueue);
-  if (redraw) DATA.tradeQueue = q;
   const now = Date.now();
   for (const [id, w] of [...tqWatch]) {
     const t = q ? q.trades.find((x) => x && x.id === id) : null;
@@ -2339,7 +2694,10 @@ async function tqPoll() {
     const waited = now - w.sentAt;
     if (t && t.status !== w.was) {
       tqWatch.delete(id);
-      s.outcome = { state: "done", message: tqOutcomeText(t) };
+      // A done action the site now shows keeps its own words, without the "updating". The
+      // group it moved to opens, so the word stays in sight (a cancel lands in Finished).
+      s.outcome = { state: "done", message: w.done && t.status === w.done.expect ? w.done.words : tqOutcomeText(t) };
+      tradeQueueView.open[tradeQueueGroupOf(t)] = true;
     } else if (q && !t) {
       // Gone from a queue that was read (the site keeps an earlier season's trade only
       // while it's approved): its card goes with the newer queue, so the drawer's head
@@ -2350,14 +2708,205 @@ async function tqPoll() {
       tqGone.set(id, words.charAt(0).toUpperCase() + words.slice(1));
     } else if (waited >= TQ_POLL_FOR_MS) {
       tqWatch.delete(id);
-      s.outcome = { state: "timeout", message: TQ_TIMEOUT_TEXT };
+      if (w.done) s.outcome = { state: "done", message: `${w.done.words} — ${TQ_SLOW_SITE_TEXT}` };
+      else if (!w.refusal) s.outcome = { state: "timeout", message: TQ_TIMEOUT_TEXT };
     } else if (waited >= TQ_POLL_FAST_FOR_MS && s.outcome && s.outcome.state === "checking") {
       s.outcome = { state: "checking", message: TQ_STILL_TEXT };
     }
   }
+  tqPollReminders(q, now);
+  const shown = q !== null ? tqWithLocal(q) : null;
+  const redraw = shown !== null && DATA && JSON.stringify(shown) !== JSON.stringify(DATA.tradeQueue);
+  if (redraw) DATA.tradeQueue = shown;
   tqSchedulePoll();
   if (redraw) refreshTradeQueue();
   else tqPaintAdmin();
+  if (!redraw) return;
+  const moved = [...groupWas].find(([id, g]) => g !== null && tqDrawnGroup(id) !== null && tqDrawnGroup(id) !== g);
+  if (moved) tqBringIntoView(moved[0]);
+}
+
+/* The group a trade is drawn in now, or null when it isn't drawn. */
+function tqDrawnGroup(id) {
+  const t = (tradeQueueTrades() || []).find((x) => x.id === id);
+  return t ? tradeQueueGroupOf(t) : null;
+}
+
+/* ---------- Trade queue: reminders ----------
+   Cory, 2026-10-24: "Also need a way to remind the trade group to vote on an existing
+   trade." With the league's relay set up, the open card of a live vote has a Remind
+   voters button, for any member: the page POSTs { action: "remind", trade } (no code) and
+   the relay signs a one-time line into the bot's inbox, the way a trade sent from the site
+   goes. The bot replies to the trade's vote card in the committee channel, pinging the
+   trade committee, and answers the way it answers everything from the site (✅, or ❌ with
+   a reason, "The league relay's answers" above). There's one reminder per trade every 6
+   hours, whoever sends it (the site, /trade remind in Discord, or the bot's own nudge a day
+   after a vote opens): site.json's remindedAt says when the last went, so the button
+   waits out the rest, with how long ago it went and the time left beside it, both in
+   hours and minutes and kept up to the minute while the drawer's open. With no answer in
+   time, or turned away as reminded already, decided or gone, the bot knows something this
+   page's site.json doesn't yet: the button is held for a minute, and site.json read again
+   (the overrides' checks, above) until it shows the reminder's time or the trade moved on,
+   so another tap doesn't post another line only to be turned away. */
+
+const TQ_REMIND_EVERY_MS = 6 * 3_600_000;
+const TQ_REMIND_HOLD_MS = 60_000; // the button held after an answer site.json has to catch up with
+const TQ_REMIND_HELP_TEXT = "Pings the trade committee in Discord to vote. One reminder per trade every 6 hours.";
+const TQ_REMIND_PENDING_TEXT = "Sent — the bot hasn't answered yet. If voters weren't reminded in the last 6 hours, the reminder is in Discord within seconds.";
+const tqRemind = new Map(); // trade id -> the last word on a reminder, { state: "sending" | "done" | "refused" | "pending" | "failed", message }
+let tqRemindInFlight = false; // one at a time, from any card
+// A reminder the bot said it sent, drawn until site.json has it: trade id -> { was:
+// site.json's remindedAt when sent, at: when it went }.
+const tqReminded = new Map();
+// An answer site.json has to catch up with: trade id -> { was: site.json's remindedAt when
+// sent, status: the trade's then, sentAt, holdUntil: the button held till then }.
+const tqRemindWatch = new Map();
+// Why a reminder's answer waits on site.json: no answer in time, or turned away as reminded
+// in the last 6 hours, decided, or gone.
+const TQ_REMIND_WAIT_ON_SITE = ["cooldown", ...TQ_SITE_BEHIND];
+
+/* Whether this trade's card offers Remind voters: a live vote the site can name, with the relay. */
+function tqRemindable(t) {
+  return Boolean(DATA.submitUrl) && t.status === "voting" && typeof t.id === "string" && /^[\w-]{1,64}$/.test(t.id);
+}
+
+/* The wait before the next reminder: { at: when the last went, left } while it's on, else null. */
+function tqRemindWait(t) {
+  const at = typeof t.remindedAt === "string" ? new Date(t.remindedAt).getTime() : NaN;
+  if (!isFinite(at)) return null;
+  const left = at + TQ_REMIND_EVERY_MS - Date.now();
+  return left > 0 ? { at, left } : null;
+}
+
+/* How long the button is still held after an answer, in ms; 0 when it isn't. */
+function tqRemindHeld(id) {
+  const w = tqRemindWatch.get(id);
+  return w ? Math.max(0, w.holdUntil - Date.now()) : 0;
+}
+
+/* "45m", "5h", "5h 59m": a number of whole minutes. */
+function tqHoursMinutes(mins) {
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/* "Reminded 2h 36m ago — next reminder in 3h 24m.": both from the same whole minutes gone
+   (rounded down), so the two always make the 6 hours, and the time left is never less than
+   it is. A reminder a clock ahead of this one says "just now". */
+function tqRemindWaitText(wait) {
+  const gone = Math.max(0, Math.floor((Date.now() - wait.at) / 60000));
+  const left = Math.max(1, TQ_REMIND_EVERY_MS / 60000 - gone);
+  return `Reminded ${gone ? tqHoursMinutes(gone) + " ago" : "just now"} — next reminder in ${tqHoursMinutes(left)}.`;
+}
+
+/* The open card's Remind voters: the button, a line on what it does (or on the wait), and
+   the last word on a reminder sent. null where the card offers none. Its words are worked
+   out again at every paint, so the drawer's tick (tqScheduleTick) keeps them up to the
+   minute, and turns the button back on the moment a wait or a hold is over. */
+function tqRemindControl(t, reg) {
+  if (!tqRemindable(t)) return null;
+  const wrap = el("div", "tq-remind");
+  const btn = tqKeyed(reg, el("button", "tq-act tq-remind-btn", "Remind voters"), t.id + ":remind");
+  btn.type = "button";
+  const note = el("div", "tq-remind-note");
+  note.id = "tq-remind-note-" + t.id;
+  btn.setAttribute("aria-describedby", note.id);
+  const status = el("div", "tq-remind-status");
+  status.setAttribute("role", "status");
+  const paint = () => {
+    const o = tqRemind.get(t.id) || null;
+    const wait = tqRemindWait(t);
+    // Off while a reminder's on its way or held, but not disabled: the button tapped keeps
+    // focus (a browser drops it from a disabled one) until the answer draws the card again.
+    btn.disabled = Boolean(wait);
+    btn.setAttribute("aria-disabled", String(Boolean(wait) || tqRemindInFlight || tqRemindHeld(t.id) > 0));
+    btn.textContent = o && o.state === "sending" ? "Sending…" : "Remind voters";
+    note.textContent = wait ? tqRemindWaitText(wait) : TQ_REMIND_HELP_TEXT;
+    status.textContent = o && o.state !== "sending" ? o.message : "";
+    status.className = "tq-remind-status" + (o ? " is-" + o.state : "");
+  };
+  // When its words or its button next change: the next whole minute of a wait (or its end),
+  // else a hold's end (a hold ends when site.json shows a wait, so there's never both). A
+  // moment past it, so the clock has surely got there.
+  const nextChange = () => {
+    const wait = tqRemindWait(t);
+    if (wait) return 60_000 - ((Date.now() - wait.at) % 60_000 + 60_000) % 60_000 + 250;
+    const held = tqRemindHeld(t.id);
+    return held > 0 ? held + 250 : null;
+  };
+  btn.addEventListener("click", () => tqSendRemind(t));
+  reg.controls.push({ id: t.id, pin: null, paint, nextChange });
+  wrap.appendChild(btn);
+  wrap.appendChild(note);
+  wrap.appendChild(status);
+  paint();
+  return wrap;
+}
+
+/* What a refused reminder says without an answer from the bot: the relay's own words. */
+function tqRemindError(out) {
+  const e = out && typeof out.error === "string" ? out.error.trim() : "";
+  return e || "Couldn't send that right now — try again in a minute, or use /trade remind in Discord.";
+}
+
+/* The request: exactly { action: "remind", trade }. A done one starts the 6-hour wait at
+   once, on this page, until site.json has the time too. One site.json has to catch up with
+   holds the button and has site.json read again. Whatever the answer, its card is opened
+   again if it was shut meanwhile, and brought into view. */
+async function tqSendRemind(t) {
+  if (tqRemindInFlight || !tqRemindable(t) || tqRemindWait(t) || tqRemindHeld(t.id) > 0) return;
+  const was = t.remindedAt ?? null;
+  tqRemindInFlight = true;
+  tqRemind.set(t.id, { state: "sending", message: "Sending…" });
+  tqPaintAdmin();
+  let outcome, answer = null;
+  try {
+    const res = await fetch(DATA.submitUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "remind", trade: t.id }),
+    });
+    const out = await Promise.resolve().then(() => res.json()).catch(() => null);
+    answer = relayAnswer(res, out);
+    outcome = !answer ? { state: "failed", message: tqRemindError(out) }
+      : answer.result === "pending" ? { state: "pending", message: TQ_REMIND_PENDING_TEXT }
+      : { state: answer.result, message: relayText("remind", answer) };
+  } catch {
+    outcome = { state: "failed", message: TQ_OFFLINE_TEXT };
+  }
+  tqRemindInFlight = false;
+  tqRemind.set(t.id, outcome);
+  const row = DATA.tradeQueue && Array.isArray(DATA.tradeQueue.trades) ? DATA.tradeQueue.trades.find((x) => x && x.id === t.id) : null;
+  if (row && answer && answer.result === "done") {
+    const at = new Date().toISOString();
+    tqReminded.set(t.id, { was, at });
+    row.remindedAt = at;
+  }
+  if (row && answer && (answer.result === "pending" || (answer.result === "refused" && TQ_REMIND_WAIT_ON_SITE.includes(answer.reason)))) {
+    const now = Date.now();
+    tqRemindWatch.set(t.id, { was, status: row.status, sentAt: now, holdUntil: now + TQ_REMIND_HOLD_MS });
+    tqPollSoon();
+  }
+  tqReveal(t.id);
+  refreshTradeQueue();
+  tqBringIntoView(t.id);
+}
+
+/* A check's word on the reminders waited on (tqPoll): one whose trade site.json shows with a
+   new reminder time, or moved on from its vote, is caught up (the pending words give way to
+   the wait's own, or to the card as the trade is now); one gone from the queue, or waited on
+   ten minutes, isn't waited on any more. q: the queue read, or null when it couldn't be. */
+function tqPollReminders(q, now) {
+  for (const [id, w] of [...tqRemindWatch]) {
+    const t = q ? q.trades.find((x) => x && x.id === id) : null;
+    if (t && (t.status !== w.status || (t.remindedAt ?? null) !== w.was)) {
+      tqRemindWatch.delete(id);
+      if (tqRemind.get(id)?.state === "pending") tqRemind.delete(id);
+    } else if ((q && !t) || now - w.sentAt >= TQ_POLL_FOR_MS) {
+      tqRemindWatch.delete(id);
+    }
+  }
 }
 
 /* ---------- Trade builder ----------
@@ -2700,20 +3249,21 @@ function renderTrade(view) {
    bot turns away a duplicate or a burst. The page sends { code, team } and nothing else,
    and keeps nothing: there's no key any more. */
 
-/* What a filed send says, for the side it was sent for. The relay's { ok: true } only means
-   the trade reached the bot's inbox: the bot can still turn it away (a player moved since the
-   last sync, a team out of trades, a duplicate, the hourly limit), and then only the owner
-   who claimed that side in Discord is DMed why, and nobody when no one has (review,
-   2026-10-23). So it says no more than that, in the Help tab's words (howTo.ts
-   siteTradesBody); and site.json is read once, at load, so the Trade Queue shows the trade
+/* What a send says, for the side it was sent for. Since 2026-10-24 the relay answers with
+   the bot's own word when it comes in a few seconds ("The league relay's answers", above):
+   filed and up for a vote, or turned away and why (a player moved since the last sync, a
+   team out of trades, a duplicate, the hourly limit; the owner who claimed that side in
+   Discord is DMed the details, and nobody when no one has). Without the bot's word in time
+   it says no more than that the trade was sent, in the Help tab's words (howTo.ts
+   siteTradesBody). site.json is read once, at load, so the Trade Queue shows the trade
    after a reload. */
 function tradeSentText(side) {
-  return "Sent to the league. If it checks out, it's up for a vote in Discord within seconds and on the Trade Queue a minute or two later (reload this page to see it there). If it can't be filed, the bot DMs the reason to whoever claimed the " + team(side).nick + " in Discord.";
+  return "Sent — the bot hasn't answered yet. If it checks out, it's up for a vote in Discord within seconds and on the Trade Queue a minute or two later (reload this page to see it there). If it can't be filed, the bot DMs the reason to whoever claimed the " + team(side).nick + " in Discord.";
 }
 const TRADE_OFFLINE_TEXT = "Couldn't reach the league server — check your connection and try again, or copy the trade code below.";
 // Transient, like the roster filter: survives re-renders but not reloads, so a fresh
 // visit never has a side chosen. team: the chosen side's teamId. outcome: the last send,
-// { key, state: "sending" | "sent" | "failed", message }, shown only on the trade and side
+// { key, state: "sending" | "sent" | "already" | "failed", message }, shown only on the trade and side
 // it was for (key). inFlight: a send not answered yet, so a second can't start beside it.
 // paint: the drawn Submit's own repaint, so an answer lands on the page showing now.
 const tradeSubmit = { team: null, outcome: null, inFlight: false, paint: null };
@@ -2756,8 +3306,8 @@ function renderTradeSubmit(summary, hasAssets) {
     const key = side !== null && hasAssets ? buildTradeCode() + "|" + side : null;
     const o = key && tradeSubmit.outcome && tradeSubmit.outcome.key === key ? tradeSubmit.outcome : null;
     const state = o ? o.state : null;
-    submitBtn.textContent = state === "sending" ? "Submitting…" : state === "sent" ? "Submitted ✓" : "Submit to League";
-    submitBtn.disabled = !key || tradeSubmit.inFlight || state === "sent";
+    submitBtn.textContent = state === "sending" ? "Submitting…" : state === "sent" ? "Submitted ✓" : state === "already" ? "Already sent" : "Submit to League";
+    submitBtn.disabled = !key || tradeSubmit.inFlight || state === "sent" || state === "already";
     submitBtn.classList.toggle("copied-flash", state === "sent");
     status.textContent = o ? o.message : hasAssets && side === null ? "Choose the team you're submitting for." : "";
   };
@@ -2811,9 +3361,14 @@ function renderTradeSubmit(summary, hasAssets) {
         body: JSON.stringify({ code, team: side }),
       });
       const out = await Promise.resolve().then(() => res.json()).catch(() => null); // an unreadable answer is a refusal without words
-      outcome = res.ok && out && out.ok === true
-        ? { key, state: "sent", message: tradeSentText(side) }
-        : { key, state: "failed", message: tradeSubmitError(out) };
+      const answer = relayAnswer(res, out);
+      // Turned away as the same trade sent in the last half hour or up for a vote now (a
+      // second tap, a send that worked and was tried again, or one since denied): it would
+      // be turned away again, so Submit stays off rather than invite a third, and says it
+      // was sent, not that this send filed it.
+      outcome = !answer ? { key, state: "failed", message: tradeSubmitError(out) }
+        : answer.result === "pending" ? { key, state: "sent", message: tradeSentText(side) }
+        : { key, state: answer.result === "done" ? "sent" : answer.reason === "already-decided" ? "already" : "failed", message: relayText("submit", answer, { team: team(side).nick }) };
     } catch {
       outcome = { key, state: "failed", message: TRADE_OFFLINE_TEXT };
     }
