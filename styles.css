@@ -657,6 +657,25 @@ a.card:active { background: var(--surface-2); }
   padding: 1px 5px; font-size: 11px;
 }
 .copied-flash { color: var(--up); font-weight: 700; }
+/* "I'm submitting for": the trade's two teams as a two-way switch (native radios, so the
+   keyboard and a screen reader get a real radio group), required before Submit. */
+.trade-for { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 8px; }
+.trade-for-label { font-size: 12px; font-weight: 700; color: var(--text-dim); }
+.trade-for-opts { display: flex; flex: 1 1 180px; gap: 6px; min-width: 0; max-width: 420px; }
+.trade-for-opt { position: relative; flex: 1 1 0; min-width: 0; cursor: pointer; }
+.trade-for-input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.trade-for-face {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 36px; padding: 6px 10px;
+  background: var(--surface); border: 1px solid var(--edge); border-radius: 9px;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-size: 13px; color: var(--text-dim);
+}
+.trade-for-logo { width: 18px; height: 18px; flex: none; }
+.trade-for-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trade-for-input:checked + .trade-for-face { color: var(--text); border-color: var(--red); box-shadow: inset 0 0 0 1px var(--red); background: #fff8f8; }
+.trade-for-input:focus-visible + .trade-for-face { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+.trade-intro .help-link { color: var(--red); font-weight: 700; text-decoration: none; white-space: nowrap; }
+.trade-intro .help-link:hover { text-decoration: underline; }
 
 /* Rows that open a team page are real <button>s for a11y — strip button chrome
    so they render identically to the plain rows they replaced. */
@@ -992,15 +1011,37 @@ a.card:active { background: var(--surface-2); }
 /* Twelve tabs when the league has rules (2026-10-22). At 2px a side that bar is 368px wide,
    so on a 360px phone Trade rode 8px off the edge. From 367px down a twelve-tab bar takes
    1.5px a side instead: every label whole at 360px, 3px apart at the closest (measured in
-   Chrome). Eleven-tab bars are untouched, and a browser without :has() scrolls the 8px. */
+   Chrome). Eleven-tab bars are untouched, and a browser without :has() scrolls the 8px.
+   Help (2026-10-23) is a twelfth tab the same way for a league without rules: 364px at 2px,
+   352px at 1.5px. */
 @media (max-width: 367px) {
-  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 1.5px; padding-right: 1.5px; }
+  .tabbar:has(> .tab:is([data-tab="rules"], [data-tab="help"]):not([hidden])) > .tab { padding-left: 1.5px; padding-right: 1.5px; }
 }
 /* Below 360, with the 8px labels: at 1.5px the twelve-tab bar measured 326px, so a 320px
    phone scrolled Trade 6px off where the eleven-tab bar fits (review, 2026-10-22). 1px a
    side measured 314px: every label whole at 320px, 2px apart at the closest. */
 @media (max-width: 359px) {
-  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 1px; padding-right: 1px; }
+  .tabbar:has(> .tab:is([data-tab="rules"], [data-tab="help"]):not([hidden])) > .tab { padding-left: 1px; padding-right: 1px; }
+}
+/* Thirteen tabs, with Rules and Help both (2026-10-23), measured in Chrome: 393px at 2px a
+   side and 381px at 1.5px with the 9px labels; 349px at 1.5px and 336px at 1px with the
+   8px ones. Nothing goes tighter than the twelve-tab bar's floors (labels 3px apart from
+   360px up, 2px below; 1px a side and the 8px labels at the least), so:
+   - up to 393px, 1.5px a side: whole at 9px from 381px (390px and 393px iPhones);
+   - up to 380px, the 8px labels too, because at 9px Help, the tab members are sent to,
+     sat mostly off a 360px screen and partly off a 375px one (review, 2026-10-23): the
+     bar fits from 349px, every label whole and 3px apart at the closest;
+   - below 360, 1px a side: it fits from 336px, labels 2px apart, as the twelve-tab bar's.
+   On a 320px phone even that is 16px too wide, so there the bar scrolls sideways as it
+   always could, the ends shadowed, the tab shown scrolled into view (revealTab). */
+@media (max-width: 393px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])):has(> .tab[data-tab="help"]:not([hidden])) > .tab { padding-left: 1.5px; padding-right: 1.5px; }
+}
+@media (max-width: 380px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])):has(> .tab[data-tab="help"]:not([hidden])) > .tab { font-size: 8px; }
+}
+@media (max-width: 359px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])):has(> .tab[data-tab="help"]:not([hidden])) > .tab { padding-left: 1px; padding-right: 1px; }
 }
 .tab svg { width: 20px; height: 20px; fill: currentColor; }
 .tab.active { color: var(--red-bright); }
@@ -1070,6 +1111,10 @@ a.card:active { background: var(--surface-2); }
   }
   .tab:first-child { margin-left: auto; }
   .tab:last-child { margin-right: auto; }
+  /* Help is the bar's last tab and ships hidden (2026-10-23): while it is, the tab before
+     it, Trade, is the end the centring hangs on. A rule of its own, so a browser without
+     :has() still keeps the one above. */
+  .tab:has(+ .tab:last-child[hidden]) { margin-right: auto; }
   .tab svg { width: 16px; height: 16px; }
   .tab.active { background: none; color: var(--text); box-shadow: inset 0 -3px 0 var(--red-bright); }
   .tab:hover { color: var(--text-dim); }
@@ -1110,15 +1155,31 @@ a.card:active { background: var(--surface-2); }
 /* Twelve tabs when the league has rules (2026-10-22): the nav at these paddings measured
    1340px with full labels and 1033 / 949px short (Chrome), so it would scroll at every
    desktop width just past each step above. A twelve-tab nav takes a little less padding a
-   tab and fits where the eleven-tab one does. Eleven-tab navs are untouched. */
+   tab and fits where the eleven-tab one does. Eleven-tab navs are untouched. Help without
+   Rules is a twelfth tab the same way (1334 / 1028 / 944px at the eleven-tab paddings). */
 @media (min-width: 900px) {
-  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 13px; padding-right: 13px; }
+  .tabbar:has(> .tab:is([data-tab="rules"], [data-tab="help"]):not([hidden])) > .tab { padding-left: 13px; padding-right: 13px; }
 }
 @media (min-width: 900px) and (max-width: 1279px) {
-  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 10px; padding-right: 10px; }
+  .tabbar:has(> .tab:is([data-tab="rules"], [data-tab="help"]):not([hidden])) > .tab { padding-left: 10px; padding-right: 10px; }
 }
 @media (min-width: 900px) and (max-width: 1023px) {
-  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])) > .tab { padding-left: 5px; padding-right: 5px; }
+  .tabbar:has(> .tab:is([data-tab="rules"], [data-tab="help"]):not([hidden])) > .tab { padding-left: 5px; padding-right: 5px; }
+}
+/* Thirteen tabs, Rules and Help both (2026-10-23): at the twelve-tab paddings the nav
+   measured 1352 / 1083 / 940px (Chrome). 9px a side is 1248px and 7px is 1005px, so it fits
+   from 1280px and from 1024px with room to spare; the narrowest step keeps the twelve-tab
+   bar's 5px floor and fits from a 941px window (remeasured, 2026-10-23), scrolling below
+   that: in a 900-940px window Help starts off the nav's end, behind its thin scrollbar.
+   3px a side would fit 900px but put a label 8px from the next tab's icon, under that floor. */
+@media (min-width: 900px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])):has(> .tab[data-tab="help"]:not([hidden])) > .tab { padding-left: 9px; padding-right: 9px; }
+}
+@media (min-width: 900px) and (max-width: 1279px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])):has(> .tab[data-tab="help"]:not([hidden])) > .tab { padding-left: 7px; padding-right: 7px; }
+}
+@media (min-width: 900px) and (max-width: 1023px) {
+  .tabbar:has(> .tab[data-tab="rules"]:not([hidden])):has(> .tab[data-tab="help"]:not([hidden])) > .tab { padding-left: 5px; padding-right: 5px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -1599,4 +1660,64 @@ a.card:active { background: var(--surface-2); }
   .rule-card { padding: 18px 22px 20px; scroll-margin-top: 128px; }
   .rule-title { font-size: 20px; }
   .rule-body { font-size: 15px; }
+}
+
+/* ---------- Help (#help, #help-<id>) ----------
+   The how-to and FAQ: one item per section, opening in place (<details>), members' first
+   and the commissioners' group last. The answer is the Rules tab's format (.rule-body) plus
+   numbered steps and inline code. A #help-<id> link opens its item and lights it as a
+   linked rule is lit: the light fades with motion and just appears and goes without. */
+.help-group { margin-top: 18px; }
+.help-item {
+  padding: 0;
+  scroll-margin-top: calc(74px + env(safe-area-inset-top));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .help-item { transition: border-color .5s ease, box-shadow .5s ease, background-color .5s ease; }
+  .help-q::after { transition: transform .15s ease; }
+}
+.help-item.help-flash {
+  border-color: var(--red);
+  background-color: #fff8f8;
+  box-shadow: 0 0 0 3px rgba(208,10,16,.16), 0 1px 3px rgba(16,21,27,.06);
+}
+.help-q {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 16px; cursor: pointer; list-style: none;
+  border-radius: var(--radius);
+}
+.help-q::-webkit-details-marker { display: none; }
+/* A chevron that turns down when the item is open. */
+.help-q::after {
+  content: ""; flex: none; width: 8px; height: 8px; margin-right: 2px;
+  border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint);
+  transform: rotate(-45deg);
+}
+.help-item[open] > .help-q::after { transform: rotate(45deg); }
+@media (hover: hover) { .help-q:hover { background: var(--surface-2); } } /* a tap on a phone would leave it grey */
+.help-q:focus-visible { outline: 2px solid var(--red-bright); outline-offset: -2px; }
+.help-title {
+  flex: 1; min-width: 0;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-stretch: 85%;
+  font-size: 17px; line-height: 1.25;
+  overflow-wrap: break-word;
+}
+.help-a { padding: 0 16px 14px; }
+.help-body { margin-top: 0; }
+.help-body ol { padding-left: 22px; }
+.help-body ol li::marker { color: var(--red); font-weight: 700; }
+.help-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em;
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 5px;
+  padding: 1px 5px; white-space: pre-wrap; overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; /* a run that wraps keeps its box on each line */
+}
+.help-tools { display: flex; justify-content: flex-end; margin-top: 12px; }
+@media (min-width: 900px) {
+  .help { max-width: 760px; margin: 0 auto; }
+  .help-item { scroll-margin-top: 128px; }
+  .help-q { padding: 16px 22px; }
+  .help-title { font-size: 19px; }
+  .help-a { padding: 0 22px 18px; }
+  .help-body { font-size: 15px; }
 }

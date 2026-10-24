@@ -2014,7 +2014,8 @@ function renderTrade(view) {
     return;
   }
   view.appendChild(sectionHead("Trade Builder", "no login needed"));
-  view.appendChild(el("p", "trade-intro", "Build the deal here, then paste the code into Discord — the bot opens it for review and the committee vote. Whoever pastes it is the proposer."));
+  if (DATA.submitUrl) view.appendChild(tradeSubmitIntro());
+  else view.appendChild(el("p", "trade-intro", "Build the deal here, then paste the code into Discord — the bot opens it for review and the committee vote. Whoever pastes it is the proposer."));
 
   const pickers = el("div", "trade-teams");
   for (const key of ["a", "b"]) {
@@ -2068,76 +2069,12 @@ function renderTrade(view) {
   const verdict = !hasAssets ? "Add players or picks to either side." : pct < 10 ? `Roughly even (within ${pct.toFixed(0)}%).` : `Favors ${totalA > totalB ? team(TRADE.b).nick : team(TRADE.a).nick} by ~${pct.toFixed(0)}%.`;
   summary.appendChild(el("div", "fairness", verdict));
 
-  // Direct submission (when the league has the Worker set up) is the primary CTA;
-  // the copy-a-code flow stays as the always-available fallback underneath.
+  // Straight to the vote (when the league has the relay set up) is the primary CTA; the
+  // copy-a-code flow stays as the always-available fallback underneath.
   const directAvailable = Boolean(DATA.submitUrl);
-  let siteKey = null;
-  try { siteKey = localStorage.getItem("site-key"); } catch {}
+  if (directAvailable) renderTradeSubmit(summary, hasAssets);
 
-  if (directAvailable && !siteKey) {
-    const keyRow = el("div");
-    const keyInput = el("input", "roster-search");
-    keyInput.type = "password";
-    keyInput.placeholder = "Paste your key from /site-key (one time)";
-    keyInput.autocomplete = "off";
-    const keyHint = el("div", "trade-code-hint");
-    keyHint.append("To submit straight to Discord, run ");
-    keyHint.appendChild(el("code", null, "/site-key"));
-    keyHint.append(" there once — tapping the link it DMs you sets this up automatically (or paste the key here).");
-    keyInput.addEventListener("change", () => {
-      const v = keyInput.value.trim();
-      if (v.startsWith("FOK1.")) {
-        try { localStorage.setItem("site-key", v); } catch {}
-        render();
-      }
-    });
-    keyRow.appendChild(keyInput);
-    keyRow.appendChild(keyHint);
-    summary.appendChild(keyRow);
-  }
-
-  if (directAvailable && siteKey) {
-    const submitBtn = el("button", "trade-cta", "Submit to League");
-    submitBtn.type = "button";
-    submitBtn.disabled = !hasAssets;
-    const status = el("div", "trade-code-hint");
-    submitBtn.addEventListener("click", async () => {
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Submitting…";
-      status.textContent = "";
-      try {
-        const res = await fetch(DATA.submitUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: siteKey, code: buildTradeCode() }),
-        });
-        const out = await res.json().catch(() => ({}));
-        if (res.ok && out.ok) {
-          submitBtn.textContent = "Submitted ✓";
-          submitBtn.classList.add("copied-flash");
-          status.textContent = "Sent to the league — the trade card is posting to Discord now. If something's off with it, the bot will DM you why.";
-        } else {
-          submitBtn.disabled = false;
-          submitBtn.textContent = "Submit to League";
-          if (res.status === 403) {
-            try { localStorage.removeItem("site-key"); } catch {}
-            status.textContent = "Your key was rejected — run /site-key in Discord for a fresh one, then paste it here again.";
-            setTimeout(render, 2500);
-          } else {
-            status.textContent = (out.error || "Couldn't submit right now.") + " You can still use the trade code below.";
-          }
-        }
-      } catch {
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Submit to League";
-        status.textContent = "Couldn't reach the league server — check your connection, or use the trade code below.";
-      }
-    });
-    summary.appendChild(submitBtn);
-    summary.appendChild(status);
-  }
-
-  const cta = el("button", "trade-cta" + (directAvailable && siteKey ? " trade-cta-secondary" : ""), TRADE.code ? "Copy Again" : "Get Trade Code");
+  const cta = el("button", "trade-cta" + (directAvailable ? " trade-cta-secondary" : ""), TRADE.code ? "Copy Again" : "Get Trade Code");
   cta.type = "button";
   cta.disabled = !hasAssets;
   cta.addEventListener("click", async () => {
@@ -2158,6 +2095,146 @@ function renderTrade(view) {
     summary.appendChild(hint);
   }
   view.appendChild(summary);
+}
+
+/* ---------- Trade builder: straight to the vote ----------
+   With the league's relay set up (site.json's submitUrl, cloudflare/worker.js), a trade
+   goes from this page to the committee vote with no Discord command. Keyless since
+   2026-10-23, Cory's call: the one-time /site-key setup confused people, and "Nobody is
+   submitting trades for someone else". The member says which side of the trade they're
+   submitting for; the relay signs a one-time line into the bot's inbox, and the bot
+   checks the trade, credits that team's claimed owner (on the site's word, never as a
+   verified identity) and opens the vote. Every trade still goes to the committee, and the
+   bot turns away a duplicate or a burst. The page sends { code, team } and nothing else,
+   and keeps nothing: there's no key any more. */
+
+/* What a filed send says, for the side it was sent for. The relay's { ok: true } only means
+   the trade reached the bot's inbox: the bot can still turn it away (a player moved since the
+   last sync, a team out of trades, a duplicate, the hourly limit), and then only the owner
+   who claimed that side in Discord is DMed why, and nobody when no one has (review,
+   2026-10-23). So it says no more than that, in the Help tab's words (howTo.ts
+   siteTradesBody); and site.json is read once, at load, so the Trade Queue shows the trade
+   after a reload. */
+function tradeSentText(side) {
+  return "Sent to the league. If it checks out, it's up for a vote in Discord within seconds and on the Trade Queue a minute or two later (reload this page to see it there). If it can't be filed, the bot DMs the reason to whoever claimed the " + team(side).nick + " in Discord.";
+}
+const TRADE_OFFLINE_TEXT = "Couldn't reach the league server — check your connection and try again, or copy the trade code below.";
+// Transient, like the roster filter: survives re-renders but not reloads, so a fresh
+// visit never has a side chosen. team: the chosen side's teamId. outcome: the last send,
+// { key, state: "sending" | "sent" | "failed", message }, shown only on the trade and side
+// it was for (key). inFlight: a send not answered yet, so a second can't start beside it.
+// paint: the drawn Submit's own repaint, so an answer lands on the page showing now.
+const tradeSubmit = { team: null, outcome: null, inFlight: false, paint: null };
+
+/* The Trade tab's intro when trades go straight to the vote, linking the Help tab's how-to
+   when this site has it. */
+function tradeSubmitIntro() {
+  const p = el("p", "trade-intro", "Build the deal here and send it straight to the committee vote. Pick the team you're submitting for, then Submit to League.");
+  if (helpSections().some((s) => s.id === "site-trades")) {
+    p.append(" ");
+    p.appendChild(helpAnchor("site-trades", "How it works"));
+  }
+  return p;
+}
+
+/* The chosen side, while it's one of the trade's two teams: a team picker changed since
+   clears it, so a send can never name a team that isn't in the trade. */
+function tradeSubmitTeam() {
+  const t = tradeSubmit.team;
+  if (t !== null && (t === TRADE.a || t === TRADE.b)) return t;
+  tradeSubmit.team = null;
+  return null;
+}
+
+/* What a refused send says: the relay's own words (written for members) when it gave some. */
+function tradeSubmitError(out) {
+  const e = out && typeof out.error === "string" ? out.error.trim() : "";
+  return e || "Couldn't submit right now — try again in a minute, or copy the trade code below.";
+}
+
+/* "I'm submitting for: [one side] / [the other]", required, then Submit and its status. */
+function renderTradeSubmit(summary, hasAssets) {
+  const submitBtn = el("button", "trade-cta trade-submit", "Submit to League");
+  submitBtn.type = "button";
+  const status = el("div", "trade-code-hint trade-submit-status");
+  status.setAttribute("aria-live", "polite");
+
+  const paint = () => {
+    const side = tradeSubmitTeam();
+    const key = side !== null && hasAssets ? buildTradeCode() + "|" + side : null;
+    const o = key && tradeSubmit.outcome && tradeSubmit.outcome.key === key ? tradeSubmit.outcome : null;
+    const state = o ? o.state : null;
+    submitBtn.textContent = state === "sending" ? "Submitting…" : state === "sent" ? "Submitted ✓" : "Submit to League";
+    submitBtn.disabled = !key || tradeSubmit.inFlight || state === "sent";
+    submitBtn.classList.toggle("copied-flash", state === "sent");
+    status.textContent = o ? o.message : hasAssets && side === null ? "Choose the team you're submitting for." : "";
+  };
+  tradeSubmit.paint = paint;
+
+  const group = el("div", "trade-for");
+  group.setAttribute("role", "radiogroup");
+  const label = el("span", "trade-for-label", "I'm submitting for:");
+  label.id = "trade-for-label";
+  group.setAttribute("aria-labelledby", label.id);
+  group.appendChild(label);
+  const opts = el("div", "trade-for-opts");
+  const chosen = tradeSubmitTeam();
+  for (const teamId of [TRADE.a, TRADE.b]) {
+    const t = team(teamId);
+    const opt = el("label", "trade-for-opt");
+    const input = el("input", "trade-for-input");
+    input.type = "radio";
+    input.name = "trade-for";
+    input.value = String(teamId);
+    input.checked = chosen === teamId;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      tradeSubmit.team = teamId;
+      paint();
+    });
+    opt.appendChild(input);
+    const face = el("span", "trade-for-face");
+    const logo = logoImg(t.abbr, "trade-for-logo");
+    logo.alt = ""; // the nickname beside it names the team
+    face.appendChild(logo);
+    face.appendChild(el("span", "trade-for-name", t.nick));
+    opt.appendChild(face);
+    opts.appendChild(opt);
+  }
+  group.appendChild(opts);
+
+  submitBtn.addEventListener("click", async () => {
+    const side = tradeSubmitTeam();
+    if (side === null || !hasAssets || tradeSubmit.inFlight) return;
+    const code = buildTradeCode();
+    const key = code + "|" + side;
+    tradeSubmit.inFlight = true;
+    tradeSubmit.outcome = { key, state: "sending", message: "" };
+    paint();
+    let outcome;
+    try {
+      const res = await fetch(DATA.submitUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, team: side }),
+      });
+      const out = await Promise.resolve().then(() => res.json()).catch(() => null); // an unreadable answer is a refusal without words
+      outcome = res.ok && out && out.ok === true
+        ? { key, state: "sent", message: tradeSentText(side) }
+        : { key, state: "failed", message: tradeSubmitError(out) };
+    } catch {
+      outcome = { key, state: "failed", message: TRADE_OFFLINE_TEXT };
+    }
+    tradeSubmit.inFlight = false;
+    tradeSubmit.outcome = outcome;
+    // The page may have been drawn again while it was sending: paint the Submit showing now.
+    if (tradeSubmit.paint) tradeSubmit.paint();
+  });
+
+  summary.appendChild(group);
+  summary.appendChild(submitBtn);
+  summary.appendChild(status);
+  paint();
 }
 
 /* ---------- Team page ---------- */
@@ -4050,32 +4127,63 @@ function ruleUpdated(iso) {
    break (Discord shows it as one too), a line starting "- " or "• " is a bullet and a
    run of them is one list, **double asterisks** are bold, and nothing else is markup.
    Built from elements and text nodes only, never from an HTML string, so a rule that
-   says "<img onerror=...>" shows exactly that. */
-function formatRuleBody(text) {
+   says "<img onerror=...>" shows exactly that.
+   The Help tab's text (HELP_FORMAT) takes two more pieces of the shared format, and only
+   when opts asks, so the Rules tab draws exactly as it always has: opts.steps, a line
+   starting "1. ", "2. " ... is a numbered step and a run of them is one list; opts.code,
+   `backticks` are inline code. */
+function formatRuleBody(text, opts) {
+  const steps = Boolean(opts && opts.steps);
   const body = el("div", "rule-body");
-  let para = null, list = null;
+  let para = null, list = null, listTag = "";
   for (const line of String(text || "").replace(/\r\n?/g, "\n").split("\n")) {
     if (!line.trim()) { para = null; list = null; continue; }
     if (/^(?:- |• )/.test(line)) {
       para = null;
-      if (!list) list = body.appendChild(el("ul"));
-      ruleInline(list.appendChild(el("li")), line.slice(2));
+      if (!list || listTag !== "ul") { list = body.appendChild(el("ul")); listTag = "ul"; }
+      ruleInline(list.appendChild(el("li")), line.slice(2), opts);
+      continue;
+    }
+    const step = steps ? line.match(/^(\d{1,3})\. /) : null;
+    if (step) {
+      para = null;
+      if (!list || listTag !== "ol") {
+        list = body.appendChild(el("ol"));
+        listTag = "ol";
+        // A run that picks up after a paragraph ("3. ...") counts on from its own number.
+        if (Number(step[1]) !== 1) list.setAttribute("start", String(Number(step[1])));
+      }
+      ruleInline(list.appendChild(el("li")), line.slice(step[0].length), opts);
       continue;
     }
     list = null;
     if (para) para.appendChild(el("br"));
     else para = body.appendChild(el("p"));
-    ruleInline(para, line);
+    ruleInline(para, line, opts);
   }
   return body;
 }
 /* One line into node: **bold** runs as <strong>, everything else as plain text. A bold
-   never spans lines, the same as on the Discord side. */
-function ruleInline(node, text) {
+   never spans lines, the same as on the Discord side. With opts.code (Help only),
+   `code` runs are <code> too, inside a bold as well, and a code run is never bold. */
+function ruleInline(node, text, opts) {
+  const code = Boolean(opts && opts.code);
   let last = 0;
-  for (const m of text.matchAll(/\*\*(.+?)\*\*/g)) {
+  for (const m of text.matchAll(code ? /`([^`]+)`|\*\*(.+?)\*\*/g : /\*\*(.+?)\*\*/g)) {
     if (m.index > last) node.appendChild(document.createTextNode(text.slice(last, m.index)));
-    node.appendChild(el("strong", null, m[1]));
+    if (!code) node.appendChild(el("strong", null, m[1]));
+    else if (m[1] !== undefined) node.appendChild(el("code", null, m[1]));
+    else ruleCodeRuns(node.appendChild(el("strong")), m[2]);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) node.appendChild(document.createTextNode(text.slice(last)));
+}
+/* `code` runs as <code>, the rest as text: the inside of a Help bold. */
+function ruleCodeRuns(node, text) {
+  let last = 0;
+  for (const m of text.matchAll(/`([^`]+)`/g)) {
+    if (m.index > last) node.appendChild(document.createTextNode(text.slice(last, m.index)));
+    node.appendChild(el("code", null, m[1]));
     last = m.index + m[0].length;
   }
   if (last < text.length) node.appendChild(document.createTextNode(text.slice(last)));
@@ -4112,15 +4220,16 @@ function copyText(text) {
   return Promise.resolve(legacy());
 }
 
-/* "Copy link": the section's own link, then "Copied" for a moment. */
-function ruleCopyButton(id, titleId) {
+/* "Copy link": the section's own link, then "Copied" for a moment. The Help tab's items
+   use it too, with their own #help-<id> link. */
+function ruleCopyButton(id, titleId, link) {
   const btn = el("button", "rule-copy", "Copy link");
   btn.type = "button";
   btn.setAttribute("aria-describedby", titleId); // which section, for a screen reader
   btn.setAttribute("aria-live", "polite"); // and that it copied
   let reset = 0;
   btn.addEventListener("click", () => {
-    copyText(ruleLink(id)).then((ok) => {
+    copyText(link || ruleLink(id)).then((ok) => {
       btn.textContent = ok ? "Copied" : "Couldn't copy";
       btn.classList.toggle("copied-flash", ok);
       clearTimeout(reset);
@@ -4178,9 +4287,133 @@ function revealRuleSection() {
   setTimeout(() => card.classList.remove("rule-flash"), RULE_FLASH_MS);
 }
 
+/* ---------- Help tab ----------
+   The league's how-to and FAQ, from site.json's help (the bot builds it from the same
+   text as Discord's /how-to): one item per section in the bot's order, the members' first
+   and a "For commissioners" group last, each opening in place. Why: Cory, 2026-10-23:
+   people get confused submitting trades inside Discord and walking each one through it is
+   aggravating, so the how-to lives on the site, as the bar's last tab. The button ships
+   hidden and only a site.json with sections shows it. Linked as #help (the tab) and
+   #help-<id> (one item, opened and scrolled to; the Trade tab's "How it works" goes to
+   #help-site-trades). The text is the Rules tab's format plus numbered steps and `code`
+   (HELP_FORMAT), drawn from elements and text nodes only. */
+
+const HELP_FORMAT = { steps: true, code: true }; // formatRuleBody's Help-only extras
+const helpOpen = new Set(); // ids opened this visit: kept open across re-renders, not reloads
+
+/* The sections to show: what site.json carries, less any row without an id or title. */
+function helpSections() {
+  const h = DATA && DATA.help;
+  const list = h && Array.isArray(h.sections) ? h.sections : [];
+  return list.filter((s) => s && typeof s.id === "string" && s.id && typeof s.title === "string");
+}
+function hasHelp() { return helpSections().length > 0; }
+
+/* The Help tab button is shown only for a site.json with help in it. */
+function syncHelpTab() {
+  for (const b of document.querySelectorAll(".tab")) {
+    if (b.dataset.tab === "help") b.hidden = !hasHelp();
+  }
+}
+
+/* #help (the tab) and #help-<id> (one item of it) as { section }, the id or null; null
+   for any other fragment. "#help-" with nothing after it is the tab. */
+function helpRoute(hash) {
+  const m = String(hash || "").match(/^#help(?:-(.*))?$/);
+  return m ? { section: m[1] || null } : null;
+}
+
+/* The link to one item: this page's address with no query and #help-<id>. */
+function helpLink(id) {
+  return location.origin + location.pathname + "#help-" + id;
+}
+
+/* A link to one Help item from elsewhere on the site: a real href (copyable, opens in a
+   new tab with a modifier) that opens the item in place on a plain tap. */
+function helpAnchor(id, text) {
+  const a = el("a", "help-link", text);
+  a.href = "#help-" + id;
+  a.addEventListener("click", (e) => {
+    if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0)) return;
+    if (e && e.preventDefault) e.preventDefault();
+    followLink("#help-" + id);
+  });
+  return a;
+}
+
+/* One FAQ item: the title opens and closes it; the answer, then its "Copy link". */
+function helpItem(s) {
+  const item = el("details", "card help-item");
+  item.id = "help-" + s.id;
+  if (helpOpen.has(s.id)) item.open = true;
+  item.addEventListener("toggle", () => { if (item.open) helpOpen.add(s.id); else helpOpen.delete(s.id); });
+  const q = el("summary", "help-q");
+  const title = el("h2", "help-title", s.title);
+  // Not "help-title-<id>": that is section "title-<id>"'s own item id.
+  title.id = "faq-title-" + s.id;
+  q.appendChild(title);
+  item.appendChild(q);
+  const a = el("div", "help-a");
+  const body = formatRuleBody(typeof s.body === "string" ? s.body : "", HELP_FORMAT);
+  body.classList.add("help-body");
+  a.appendChild(body);
+  const tools = el("div", "help-tools");
+  tools.appendChild(ruleCopyButton(s.id, title.id, helpLink(s.id)));
+  a.appendChild(tools);
+  item.appendChild(a);
+  return item;
+}
+
+function helpList(sections) {
+  const list = el("div", "grid help-list");
+  for (const s of sections) list.appendChild(helpItem(s));
+  return list;
+}
+
+/* Members' items first, in the bot's order; the commissioners' after them, as their own group. */
+function renderHelp(view) {
+  const sections = helpSections();
+  const wrap = el("div", "help");
+  wrap.appendChild(sectionHead("Help & FAQ", sections.length ? "Tap a topic to open it." : ""));
+  if (!sections.length) {
+    const card = el("div", "card");
+    card.appendChild(el("div", "empty", "No help posted yet."));
+    wrap.appendChild(card);
+    view.appendChild(wrap);
+    return;
+  }
+  const members = sections.filter((s) => s.audience !== "commissioners");
+  const commissioners = sections.filter((s) => s.audience === "commissioners");
+  if (members.length) wrap.appendChild(helpList(members));
+  if (commissioners.length) {
+    const group = el("section", "help-group");
+    group.appendChild(sectionHead("For commissioners"));
+    group.appendChild(helpList(commissioners));
+    wrap.appendChild(group);
+  }
+  view.appendChild(wrap);
+}
+
+/* A #help-<id> link's item, once the tab is drawn: opened, scrolled to the top of the
+   window (scroll-margin-top keeps it clear of the sticky bars) and lit for as long as a
+   linked rule is. An id the site doesn't have leaves the tab at its top. Once per link:
+   a later re-render stays where the member scrolled to. */
+function revealHelpSection() {
+  const id = viewHelpId;
+  viewHelpId = null;
+  if (!id) return;
+  const item = document.getElementById("help-" + id);
+  if (!item || !item.classList.contains("help-item")) return;
+  item.open = true;
+  helpOpen.add(id);
+  if (typeof item.scrollIntoView === "function") item.scrollIntoView({ block: "start" });
+  item.classList.add("help-flash");
+  setTimeout(() => item.classList.remove("help-flash"), RULE_FLASH_MS);
+}
+
 /* ---------- App shell ---------- */
 
-const RENDERERS = { home: renderHome, teams: renderTeams, players: renderPlayers, freeagents: renderFreeAgents, standings: renderStandings, rankings: renderRankings, leaders: renderLeaders, updates: renderUpdates, transactions: renderTransactions, news: renderNews, rules: renderRules, trade: renderTrade };
+const RENDERERS = { home: renderHome, teams: renderTeams, players: renderPlayers, freeagents: renderFreeAgents, standings: renderStandings, rankings: renderRankings, leaders: renderLeaders, updates: renderUpdates, transactions: renderTransactions, news: renderNews, rules: renderRules, trade: renderTrade, help: renderHelp };
 let activeTab = "home";
 let lastRenderedTab = null;
 let viewTeamId = null; // non-null = the team detail page is open over the current tab
@@ -4188,6 +4421,8 @@ let viewDraftHq = false; // the league-wide Draft HQ page
 let viewGameId = null; // non-null = a game page (#game-<scheduleId>) is open over the current tab
 let viewRuleId = null; // a #rules-<id> link's section, scrolled to once the Rules tab is drawn
 let tabBeforeRules = "home"; // the tab showing before the Rules tab took over, for Back off a #rules link
+let viewHelpId = null; // a #help-<id> link's item, opened and scrolled to once the Help tab is drawn
+let tabBeforeHelp = "home"; // the tab showing before the Help tab took over, for Back off a #help link
 let viewTradeQueue = false; // a #trade-queue link: the queue scrolled to once the Trade tab is drawn
 let tabBeforeTradeQueue = null; // the tab a #trade-queue link took the Trade tab over from, for Back off it; null while the Trade tab is the member's own pick
 const teamSort = { col: "ovr", dir: -1 }; // roster table sort state, survives re-renders
@@ -4235,8 +4470,8 @@ function closeGame(viaHistory) {
 }
 /* The page a URL fragment names: #team-<id>, #game-<scheduleId> (the link the Discord
    matchup breakdown posts), or #draft; or the tab, #rules / #rules-<id> (the links bot
-   posts put where arguments start) or #trade-queue (the Trade tab at its queue). Read on
-   load and on every back / forward. */
+   posts put where arguments start), #help / #help-<id> (the how-to) or #trade-queue (the
+   Trade tab at its queue). Read on load and on every back / forward. */
 function routeFromHash() {
   const hash = location.hash || "";
   const team = hash.match(/^#team-(\d+)$/);
@@ -4245,23 +4480,32 @@ function routeFromHash() {
   viewGameId = game ? Number(game[1]) : null;
   viewDraftHq = hash === "#draft";
   const rules = rulesRoute(hash);
+  const help = helpRoute(hash);
   const queue = hash === "#trade-queue";
   viewRuleId = null;
+  viewHelpId = null;
   viewTradeQueue = false;
   if (rules) {
     // A league without rules has no Rules tab: its link opens Home.
     if (!hasRules()) { activeTab = "home"; return; }
-    // Over a Trade tab a #trade-queue link opened, the tab before is the one under that link.
-    if (activeTab !== "rules") tabBeforeRules = activeTab === "trade" && tabBeforeTradeQueue !== null ? tabBeforeTradeQueue : activeTab;
+    // Over a tab another link opened, the tab before is the one under that link (and on
+    // the Rules tab already, the one under it stays).
+    tabBeforeRules = tabUnderLinks();
     activeTab = "rules";
     viewRuleId = rules.section;
+  } else if (help) {
+    // A site.json without help has no Help tab: its link opens Home.
+    if (!hasHelp()) { activeTab = "home"; return; }
+    tabBeforeHelp = tabUnderLinks();
+    activeTab = "help";
+    viewHelpId = help.section;
   } else if (queue) {
-    // The Trade tab, at the queue. Taken over from the Rules tab, the tab before is the
-    // one under that, so Back to the bare address lands where the member was before any link.
-    // When that is the Trade tab itself (Trade tapped, then a Rules link), Trade is still
-    // the member's own pick: null, as for the link followed from Trade.
+    // The Trade tab, at the queue. Taken over from the Rules or Help tab, the tab before is
+    // the one under that, so Back to the bare address lands where the member was before any
+    // link. When that is the Trade tab itself (Trade tapped, then a Rules link), Trade is
+    // still the member's own pick: null, as for the link followed from Trade.
     if (activeTab !== "trade") {
-      const under = activeTab === "rules" ? tabBeforeRules : activeTab;
+      const under = tabUnderLinks();
       tabBeforeTradeQueue = under === "trade" ? null : under;
     }
     activeTab = "trade";
@@ -4269,26 +4513,46 @@ function routeFromHash() {
   } else if (activeTab === "rules" && !team && !game && !viewDraftHq) {
     // Back off a #rules link onto the bare address: the tab that was showing before it.
     activeTab = tabBeforeRules;
+  } else if (activeTab === "help" && !team && !game && !viewDraftHq) {
+    // Back off a #help link onto the bare address, the same way.
+    activeTab = tabBeforeHelp;
   } else if (activeTab === "trade" && tabBeforeTradeQueue !== null && !team && !game && !viewDraftHq) {
     // Back off a #trade-queue link onto the bare address, the same way.
     activeTab = tabBeforeTradeQueue;
     tabBeforeTradeQueue = null;
   }
 }
-window.addEventListener("popstate", () => {
+/* The tab the member was on under whichever link's tab is showing (Rules, Help, or a
+   Trade tab a #trade-queue link opened); the tab itself for any other. So links followed
+   one after another all lead Back to where the member was before the first. */
+function tabUnderLinks() {
+  if (activeTab === "rules") return tabBeforeRules;
+  if (activeTab === "help") return tabBeforeHelp;
+  if (activeTab === "trade" && tabBeforeTradeQueue !== null) return tabBeforeTradeQueue;
+  return activeTab;
+}
+/* The address changed under the page (back / forward, an edited fragment, a followed
+   in-page link): route it. A fragment that changes the tab (#rules, or Back off it) moves
+   the bar's highlight too, inside the transition the way a tap does. */
+function routeChanged() {
   const from = currentViewKey(), fromTab = activeTab;
   routeFromHash();
-  // A fragment that changes the tab (#rules, or Back off it) moves the bar's highlight
-  // too, inside the transition the way a tap does.
   fxHistory(from, activeTab === fromTab ? render : () => { markTab(activeTab); render(); });
-});
+}
+window.addEventListener("popstate", routeChanged);
+/* An in-page link to a fragment (the Trade tab's "How it works"): a new history entry,
+   routed as a followed link is, so Back returns to the page it was tapped on. */
+function followLink(hash) {
+  try { history.pushState(null, "", location.pathname + location.search + hash); } catch {}
+  routeChanged();
+}
 
-/* The address a tab lives at: #rules for the Rules tab, so its link can be shared and a
-   reload stays on it; #trade-queue for a Trade tab a #trade-queue link opened, so closing
-   a page over it keeps the link's address; the bare page for every other tab, as it
-   always was. */
+/* The address a tab lives at: #rules for the Rules tab and #help for the Help tab, so
+   their links can be shared and a reload stays on them; #trade-queue for a Trade tab a
+   #trade-queue link opened, so closing a page over it keeps the link's address; the bare
+   page for every other tab, as it always was. */
 function tabUrl(name) {
-  return location.pathname + location.search + (name === "rules" ? "#rules" : name === "trade" && tabBeforeTradeQueue !== null ? "#trade-queue" : "");
+  return location.pathname + location.search + (name === "rules" ? "#rules" : name === "help" ? "#help" : name === "trade" && tabBeforeTradeQueue !== null ? "#trade-queue" : "");
 }
 
 /* Which page is showing: a tab's name, or "team-<id>" / "game-<id>" / "draft-hq". */
@@ -4315,29 +4579,33 @@ function render() {
   // Re-rendering the SAME view (the trade builder does this on every tap) keeps the
   // scroll position; switching views starts at the top like a page change should.
   window.scrollTo(0, keepScroll ? y : 0);
-  // A #rules-<id> link then lands on its section, a #trade-queue link on the queue.
+  // A #rules-<id> link then lands on its section, a #help-<id> link on its item, a
+  // #trade-queue link on the queue.
   if (activeTab === "rules") revealRuleSection();
+  if (activeTab === "help") revealHelpSection();
   if (activeTab === "trade") revealTradeQueue();
 }
 
 /* Switching tabs, from the tab bar or from a link inside a page (the home wire's "All
    transactions →"). Either way an open team page, game page or Draft HQ closes, the way the bar
-   always did. On the narrowest phones the bar scrolls sideways (eleven tabs, twelve with
-   Rules), so the tab switched to is scrolled into view: a link must never land on a tab
-   the bar hides. */
+   always did. On narrow phones the bar scrolls sideways (eleven tabs, twelve with Rules,
+   thirteen with Help too), so the tab switched to is scrolled into view: a link must never
+   land on a tab the bar hides. */
 function showTab(name) {
   const from = currentViewKey(), fromTab = activeTab;
   viewTeamId = null;
   viewGameId = null;
   viewDraftHq = false;
   viewRuleId = null; // a section link not drawn yet is dropped, never kept for a later visit
+  viewHelpId = null; // and so is a Help item's
   viewTradeQueue = false; // and so is a queue link's scroll
   // A tapped tab is the member's own pick, not a link's. Trade tapped on a Trade tab a
   // #trade-queue link opened stays that link, the way Rules tapped again stays #rules.
-  const underQueue = tabBeforeTradeQueue;
+  const under = tabUnderLinks(); // read before the queue's hold is let go below
   if (!(name === "trade" && fromTab === "trade")) tabBeforeTradeQueue = null;
   try { history.replaceState(null, "", tabUrl(name)); } catch {}
-  if (name === "rules" && fromTab !== "rules") tabBeforeRules = fromTab === "trade" && underQueue !== null ? underQueue : fromTab;
+  if (name === "rules") tabBeforeRules = under; // Rules tapped again: the one under it stays
+  if (name === "help") tabBeforeHelp = under;
   activeTab = name;
   // The bar's highlight moves inside the transition, so the old frame still shows the old tab.
   const update = () => { markTab(name); render(); };
@@ -4775,20 +5043,20 @@ async function load() {
   try { mountCrest(document, typeof Image === "function" ? Image : null, "logo/crest-120.png"); } catch {}
   document.getElementById("week-chip").textContent = DATA.weekLabel || "—";
   syncRulesTab();
+  syncHelpTab();
   routeFromHash();
-  if (activeTab !== "home") markTab(activeTab); // a #rules link: the page opens on the tab
+  if (activeTab !== "home") markTab(activeTab); // a #rules or #help link: the page opens on the tab
   render();
 }
 
-/* Magic-link setup: /site-key DMs a personal link ending in #k=FOK1... — tapping
-   it lands here, we store the key and scrub it from the URL immediately. The
-   fragment never reaches any server (fragments aren't sent in requests), so the
-   key exists only in the DM and this device. */
-(function keyFromLink() {
-  const m = (location.hash || "").match(/[#&]k=(FOK1\.[0-9]+\.[A-Za-z0-9_-]+)/);
-  if (!m) return;
-  try { localStorage.setItem("site-key", m[1]); } catch {}
-  history.replaceState(null, "", location.pathname + location.search);
+/* Trades from the site are keyless since 2026-10-23, so /site-key and its keys are gone.
+   A key an older version of this page stored is cleared, silently: nothing reads it any
+   more. A link an old /site-key DM still holds (#k=FOK1...) lands here as well; its dead
+   key is taken out of the address and never stored. */
+(function retireSiteKey() {
+  try { localStorage.removeItem("site-key"); } catch {}
+  if (!/[#&]k=FOK1\./.test(location.hash || "")) return;
+  try { history.replaceState(null, "", location.pathname + location.search); } catch {}
 })();
 
 /* iOS install hint — Safari has no install prompt, so surface the one-time how-to.
