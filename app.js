@@ -1632,48 +1632,78 @@ function renderNews(view) {
 }
 
 /* ---------- Trade queue ----------
-   Above the builder: every trade sent to the committee that's still live, and this
-   season's finished ones, from site.json's tradeQueue (the bot's tradeQueueStore.ts),
-   newest first. Counts only, never who voted or proposed: the vote channel is private on
-   purpose. An approved trade turns "Done in Madden" once a sync shows its players moved;
-   a picks-only one can't be seen in EA's data, so it stays "make it in Madden". Linked as
-   #trade-queue. An older site.json without the field shows no queue at all. */
+   Every trade sent to the committee that's still live, and this season's finished ones,
+   from site.json's tradeQueue (the bot's tradeQueueStore.ts), newest first. Counts only,
+   never who voted or proposed: the vote channel is private on purpose. An approved trade
+   turns "Done in Madden" once a sync shows its players moved; a picks-only one can't be
+   seen in EA's data, so it stays "make it in Madden". A commissioner can decide or cancel
+   a trade from its card ("Trade queue: commissioner overrides", below). An older site.json
+   without the field shows no queue at all.
 
-const TQ_FINISHED_SHOWN = 3; // done / denied cards drawn before "Show more"
+   In a side drawer since 2026-10-24 (Cory: "pending trades shouldn't be up top, have a
+   trade queue in a side drawer"): a "Trade Queue" button heads the Trade tab, counting
+   what's still open (live votes, and approved trades not yet made in Madden), and opens
+   the drawer over the page. Linked as #trade-queue: the Trade tab with the drawer open. */
+
+const TQ_FINISHED_SHOWN = 3; // done / denied / cancelled cards drawn before "Show more"
+const TQ_LEAVE_MS = 180; // the drawer's slide out, with motion (styles.css .tq-leaving)
+const TQ_BACK_GRACE_MS = 1000; // a close that went Back and never landed closes in place after this
 const tradeQueueView = { showAll: false }; // transient, survives re-renders but not reloads
 
-/* Each status's pill and the time its card counts from. */
+/* Each status's pill, the pill when a commissioner decided it, and the time its card
+   counts from. A cancelled trade shows no time: site.json carries none for a cancellation
+   (an approved trade's decidedAt is still its approval). */
 const TQ_STATUS = {
   voting: { label: "Voting", verb: "submitted", at: "submittedAt" },
-  approved: { label: "Approved — make it in Madden", verb: "approved", at: "decidedAt" },
+  approved: { label: "Approved — make it in Madden", commissioner: "Approved by commissioner — make it in Madden", verb: "approved", at: "decidedAt" },
   done: { label: "Done in Madden", verb: "done", at: "doneAt" },
-  denied: { label: "Denied", verb: "denied", at: "decidedAt" },
+  denied: { label: "Denied", commissioner: "Denied by commissioner", verb: "denied", at: "decidedAt" },
+  cancelled: { label: "Cancelled", verb: "cancelled", at: null },
 };
+
+/* A trade's status as this page draws it. One the page doesn't know yet (the bot may add
+   one) is a plain grey pill in its own words, with no time and no controls; only a short
+   lowercase word is drawn that way, and anything else isn't a row the page can draw. */
+function tqStatus(t) {
+  if (Object.prototype.hasOwnProperty.call(TQ_STATUS, t.status)) return TQ_STATUS[t.status];
+  if (typeof t.status !== "string" || !/^[a-z][a-z_-]{0,23}$/.test(t.status)) return null;
+  const words = t.status.replace(/[_-]+/g, " ").trim();
+  return { label: words.charAt(0).toUpperCase() + words.slice(1), verb: null, at: null, unknown: true };
+}
 
 /* The trades to draw, less any row the page couldn't draw; null when site.json predates the queue. */
 function tradeQueueTrades() {
   const q = DATA && DATA.tradeQueue;
   if (!q || !Array.isArray(q.trades)) return null;
-  return q.trades.filter((t) => t && Object.prototype.hasOwnProperty.call(TQ_STATUS, t.status) && t.teamA && t.teamB);
+  return q.trades.filter((t) => t && tqStatus(t) && t.teamA && t.teamB);
 }
 
 function tradeQueueOpen(t) { return t.status === "voting" || t.status === "approved"; }
 
+/* "2 voting · 1 to make in Madden": what's still open; "" when nothing is. */
+function tradeQueueOpenText(trades) {
+  const voting = trades.filter((t) => t.status === "voting").length;
+  const toMake = trades.filter((t) => t.status === "approved").length;
+  return [voting ? `${voting} voting` : "", toMake ? `${toMake} to make in Madden` : ""].filter(Boolean).join(" · ");
+}
+
 /* "submitted 2h ago", from the time the status counts from; "" when that time is missing
    or unreadable (a vote already open when the queue began has no submitted time). */
 function tradeQueueWhen(t) {
-  const s = TQ_STATUS[t.status];
-  const iso = t[s.at];
+  const s = tqStatus(t);
+  const iso = s.at ? t[s.at] : null;
   if (typeof iso !== "string" || !isFinite(new Date(iso).getTime())) return "";
   return `${s.verb} ${timeAgo(iso)} ago`;
 }
 
 /* The status pill. A live vote shows its counts against the bar, "Voting — ✅ 2 · ❌ 1 of 3",
-   with the same read out in words for a screen reader. */
+   with the same read out in words for a screen reader. A trade a commissioner decided
+   says so: "Approved by commissioner — make it in Madden". */
 function tradeQueuePill(t) {
   const pill = el("span", "tq-pill");
   if (t.status !== "voting") {
-    pill.textContent = TQ_STATUS[t.status].label;
+    const s = tqStatus(t);
+    pill.textContent = t.decidedBy === "commissioner" && s.commissioner ? s.commissioner : s.label;
     return pill;
   }
   const yes = Number(t.approveCount) || 0, no = Number(t.rejectCount) || 0;
@@ -1711,6 +1741,12 @@ function tradeQueuePick(a) {
   return el("div", "tq-pick", "🎟 " + pickText(a.round, a.slot, year));
 }
 
+/* A side's team by its nickname; one the site doesn't know, by the queue's abbreviation. */
+function tradeQueueTeamName(side) {
+  const t = team(side.teamId);
+  return t.abbr !== "?" ? t.nick : String(side.abbr || "?");
+}
+
 /* One team and what it receives. */
 function tradeQueueSide(side) {
   const t = team(side.teamId);
@@ -1719,7 +1755,7 @@ function tradeQueueSide(side) {
   wrap.style.setProperty("--rail", railColor(abbr));
   const head = el("div", "tx-side-head");
   head.appendChild(logoImg(abbr, "tx-side-logo"));
-  head.appendChild(el("span", "tx-side-team", `${t.abbr !== "?" ? t.nick : abbr} receive`));
+  head.appendChild(el("span", "tx-side-team", `${tradeQueueTeamName(side)} receive`));
   wrap.appendChild(head);
   let drawn = 0;
   for (const a of Array.isArray(side.gets) ? side.gets : []) {
@@ -1733,8 +1769,11 @@ function tradeQueueSide(side) {
   return wrap;
 }
 
-function tradeQueueCard(t) {
-  const card = el("div", "card tq-card tq-" + t.status);
+/* reg collects what the drawer's redraw carries over: each commissioner control, and the
+   elements keyed for keeping focus (tqKeyed). */
+function tradeQueueCard(t, reg) {
+  const s = tqStatus(t);
+  const card = el("div", "card tq-card tq-" + (s.unknown ? "other" : t.status));
   const head = el("div", "tq-head");
   head.appendChild(tradeQueuePill(t));
   const when = tradeQueueWhen(t);
@@ -1744,49 +1783,581 @@ function tradeQueueCard(t) {
   sides.appendChild(tradeQueueSide(t.teamA));
   sides.appendChild(tradeQueueSide(t.teamB));
   card.appendChild(sides);
+  const admin = tqAdminControl(t, reg);
+  if (admin) card.appendChild(admin);
   return card;
 }
 
 /* The queue: every live trade, and the finished ones a few at a time. */
-function renderTradeQueue(view) {
-  const trades = tradeQueueTrades();
-  if (!trades) return;
+function tradeQueueSection(trades, reg) {
   const wrap = el("section", "tq");
   wrap.id = "trade-queue";
-  const voting = trades.filter((t) => t.status === "voting").length;
-  const toMake = trades.filter((t) => t.status === "approved").length;
-  wrap.appendChild(sectionHead("Trade Queue", [voting ? `${voting} voting` : "", toMake ? `${toMake} to make in Madden` : ""].filter(Boolean).join(" · ")));
   if (!trades.length) {
     const card = el("div", "card");
     card.appendChild(el("div", "empty", "Nothing in the queue. A trade sent to the committee shows up here with its vote."));
     wrap.appendChild(card);
-    view.appendChild(wrap);
-    return;
+    return wrap;
   }
   let finished = 0;
   const shown = trades.filter((t) => tradeQueueOpen(t) || tradeQueueView.showAll || finished++ < TQ_FINISHED_SHOWN);
   const list = el("div", "grid tq-list");
-  for (const t of shown) list.appendChild(tradeQueueCard(t));
+  for (const t of shown) list.appendChild(tradeQueueCard(t, reg));
   wrap.appendChild(list);
   const hidden = trades.length - shown.length;
   if (hidden > 0) {
     const more = el("button", "rail-more tq-more", `Show ${hidden} more decided trade${hidden === 1 ? "" : "s"}`);
     more.type = "button";
-    more.addEventListener("click", () => { tradeQueueView.showAll = true; render(); });
+    more.addEventListener("click", () => { tradeQueueView.showAll = true; paintTradeQueueDrawer(); });
     wrap.appendChild(more);
   }
-  view.appendChild(wrap);
+  return wrap;
 }
 
-/* A #trade-queue link, once the Trade tab is drawn: the queue scrolled to the top of the
-   window (its scroll-margin-top keeps it clear of the sticky bars). Once per link: a
-   later re-render of the tab, a tap in the builder, stays where the member scrolled to. */
-function revealTradeQueue() {
-  const wanted = viewTradeQueue;
+/* The Trade tab's way in: "Trade Queue", what's open, and a count of it. null when
+   site.json predates the queue. */
+function tradeQueueButton() {
+  const trades = tradeQueueTrades();
+  if (!trades) return null;
+  const btn = el("button", "tq-open");
+  btn.type = "button";
+  btn.id = "tq-open";
+  btn.setAttribute("aria-haspopup", "dialog");
+  btn.setAttribute("aria-controls", "tq-drawer");
+  btn.setAttribute("aria-expanded", String(tradeQueueDrawerDue()));
+  const words = el("span", "tq-open-text");
+  words.appendChild(el("span", "tq-open-title", "Trade Queue"));
+  words.appendChild(el("span", "tq-open-sub", tradeQueueOpenText(trades) || (trades.length ? "Nothing open right now" : "Nothing in the queue yet")));
+  btn.appendChild(words);
+  const open = trades.filter(tradeQueueOpen).length;
+  if (open) {
+    // The words beside it already say what's open: the number is for the eye.
+    const badge = el("span", "tq-badge", String(open));
+    badge.setAttribute("aria-hidden", "true");
+    btn.appendChild(badge);
+  }
+  btn.addEventListener("click", openTradeQueue);
+  return btn;
+}
+
+/* ---------- Trade queue: the drawer ----------
+   Over the whole page from the right (the full width on a phone of 480px or less), with an
+   overlay behind it: X, Esc or a tap on the overlay closes it. It is modal: focus moves in
+   on open and Tab stays inside, the page under it doesn't scroll, and focus goes back to
+   the Trade Queue button on close. It slides only for a member who hasn't asked for less
+   motion. It lives outside #view, so a redraw of the page underneath never touches it:
+   render() ends by matching it to the route (syncTradeQueueDrawer). */
+
+let tqDrawer = null; // while it shows: { ov, panel, sub, note, body, close, onKey, reg, closing }
+
+function focusQuietly(node) {
+  if (node && typeof node.focus === "function") { try { node.focus({ preventScroll: true }); } catch {} }
+}
+
+/* Whether the drawer shows: the Trade tab with its drawer open, no page over it, and a
+   queue in this site.json. */
+function tradeQueueDrawerDue() {
+  return Boolean(DATA) && viewTradeQueue && activeTab === "trade" && viewTeamId == null && viewGameId == null && !viewDraftHq && tradeQueueTrades() !== null;
+}
+
+function syncTradeQueueDrawer() {
+  if (!tradeQueueDrawerDue()) { unmountTradeQueueDrawer(); return; }
+  if (tqDrawer) paintTradeQueueDrawer();
+  else mountTradeQueueDrawer();
+}
+
+function mountTradeQueueDrawer() {
+  const ov = el("div", "tq-ov");
+  const panel = el("aside", "tq-drawer");
+  panel.id = "tq-drawer";
+  panel.tabIndex = -1; // where focus rests when the element that had it is redrawn away
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+  panel.setAttribute("aria-labelledby", "tq-drawer-title");
+  const head = el("div", "tq-drawer-head");
+  const titles = el("div", "tq-drawer-titles");
+  const title = el("h2", "tq-drawer-title", "Trade Queue");
+  title.id = "tq-drawer-title";
+  titles.appendChild(title);
+  const sub = el("div", "tq-drawer-sub");
+  titles.appendChild(sub);
+  // The last word on a trade that left the queue after a send (its card went with it).
+  // In the head, so a redraw of the body never takes it, and announced as it changes.
+  const note = el("div", "tq-drawer-note");
+  note.setAttribute("role", "status");
+  titles.appendChild(note);
+  head.appendChild(titles);
+  const x = el("button", "tq-close", "✕");
+  x.type = "button";
+  x.setAttribute("aria-label", "Close the Trade Queue");
+  x.addEventListener("click", () => closeTradeQueue());
+  head.appendChild(x);
+  panel.appendChild(head);
+  const body = el("div", "tq-drawer-body");
+  panel.appendChild(body);
+  ov.appendChild(panel);
+  // A tap on the overlay, not one inside the drawer that bubbled up to it.
+  ov.addEventListener("click", (e) => { if (e && e.target === ov) closeTradeQueue(); });
+  // Escape closes; Tab and Shift+Tab stay inside (the player card's way). A player card
+  // opened from a queue card sits over the drawer, and the keys are its own.
+  const onKey = (e) => {
+    if (document.querySelector(".pcard-ov")) return;
+    if (e.key === "Escape") { closeTradeQueue(); return; }
+    if (e.key !== "Tab" || typeof panel.querySelectorAll !== "function") return;
+    const stops = [...panel.querySelectorAll("button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+      .filter((n) => !(typeof n.closest === "function" && n.closest("[hidden]")));
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    const at = document.activeElement;
+    const inside = panel.contains(at);
+    if (e.shiftKey ? (at === first || !inside) : (at === last || !inside)) {
+      if (typeof e.preventDefault === "function") e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
+  };
+  document.addEventListener("keydown", onKey);
+  tqDrawer = { ov, panel, sub, note, body, close: x, onKey, reg: null, closing: false };
+  paintTradeQueueDrawer();
+  document.body.appendChild(ov);
+  document.body.classList.add("tq-locked");
+  const btn = document.getElementById("tq-open");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+  focusQuietly(x);
+}
+
+/* The drawer's contents, drawn again (Show more, a newer queue from a check): where it was
+   scrolled to, the element that had focus, and a commissioner code half-typed all carry
+   over. The code passes from the old field to the new one and nowhere else. */
+function paintTradeQueueDrawer() {
+  const d = tqDrawer;
+  if (!d) return;
+  const before = d.reg;
+  const active = document.activeElement;
+  const inBody = Boolean(active) && d.body.contains(active); // about to be drawn away
+  const focusKey = inBody && active.dataset ? active.dataset.tqKey || null : null;
+  const typed = new Map();
+  if (before) for (const c of before.controls) if (c.pin && c.pin.value) typed.set(c.id, c.pin.value);
+  const scrolled = d.body.scrollTop;
+  const reg = { controls: [], keyed: new Map() };
+  d.reg = reg;
+  const trades = tradeQueueTrades() || [];
+  d.sub.textContent = tradeQueueOpenText(trades);
+  // A watched trade's word once it left the queue, for as long as it's still off it.
+  d.note.replaceChildren(...[...tqGone].filter(([id]) => !trades.some((t) => t.id === id)).map(([, words]) => el("div", "tq-drawer-note-line", words)));
+  d.body.replaceChildren(tradeQueueSection(trades, reg));
+  for (const c of reg.controls) if (c.pin && typed.has(c.id)) c.pin.value = typed.get(c.id);
+  if (typeof scrolled === "number") d.body.scrollTop = scrolled;
+  if (inBody) {
+    // The same control in the new drawing, else the drawer itself (Show more is gone once used).
+    const again = focusKey ? reg.keyed.get(focusKey) : null;
+    focusQuietly(again && !again.disabled ? again : d.panel);
+  }
+}
+
+function unmountTradeQueueDrawer() {
+  const d = tqDrawer;
+  if (!d) return;
+  tqDrawer = null;
+  document.removeEventListener("keydown", d.onKey);
+  document.body.classList.remove("tq-locked");
+  // A confirm step doesn't outlive the drawer: the commissioner code typed for it went with it.
+  for (const s of tqAdmin.values()) s.confirm = null;
+  const btn = document.getElementById("tq-open");
+  if (btn) { btn.setAttribute("aria-expanded", "false"); focusQuietly(btn); }
+  if (!fxMotionOK()) { d.ov.remove(); return; }
+  d.ov.classList.add("tq-leaving");
+  setTimeout(() => d.ov.remove(), TQ_LEAVE_MS);
+}
+
+/* How the history entry the drawer shows on opened it, written there by openTradeQueue or
+   routeFromHash: "pushed" (the button's own entry, over the Trade tab), "followed" (a link
+   followed on this page, with the page it was followed from behind it) or "loaded" (the
+   address the page loaded on: maybe nothing of this site's behind it). */
+function tradeQueueEntryKind() {
+  try { const s = history.state; return s && typeof s.tradeQueue === "string" ? s.tradeQueue : null; } catch { return null; }
+}
+
+/* The button's tap: a new history entry, so the phone's Back closes the drawer and the
+   drawer's own close goes Back to this tab. */
+function openTradeQueue() {
+  if (tradeQueueDrawerDue()) return;
+  let pushed = false;
+  try {
+    history.pushState({ tradeQueue: "pushed" }, "", location.pathname + location.search + "#trade-queue");
+    pushed = location.hash === "#trade-queue";
+  } catch {}
+  if (pushed) { routeChanged(); return; }
+  viewTradeQueue = true; // no history to write to: open it in place
+  render();
+}
+
+/* X, Esc or the overlay. Opened by the button or by a link followed on this page, Back is
+   exactly where the member was before it opened, so it goes Back (and Forward opens it
+   again), the way the phone's Back does. Opened by the address the page loaded on (a
+   Discord link), there may be nothing of this site's behind it: the link's address goes,
+   and the Trade tab under the drawer stays, now the member's own. */
+function closeTradeQueue() {
+  const d = tqDrawer;
+  if (!d || d.closing) return;
+  const kind = tradeQueueEntryKind();
+  if (kind === "pushed" || kind === "followed") {
+    d.closing = true; // a second tap mustn't go Back twice
+    try { history.back(); } catch {}
+    // A Back that never lands (no entry behind after all) still closes it. One that moved
+    // the address and hasn't been routed yet is left to its route: closing in place now
+    // would write over the entry it landed on.
+    setTimeout(() => {
+      if (tqDrawer === d && (location.hash || "") === "#trade-queue") closeTradeQueueHere();
+    }, TQ_BACK_GRACE_MS);
+    return;
+  }
+  closeTradeQueueHere();
+}
+function closeTradeQueueHere() {
   viewTradeQueue = false;
-  if (!wanted) return;
-  const q = document.getElementById("trade-queue");
-  if (q && typeof q.scrollIntoView === "function") q.scrollIntoView({ block: "start" });
+  tabBeforeTradeQueue = null;
+  try { history.replaceState(null, "", tabUrl(activeTab)); } catch {}
+  render();
+}
+
+/* A newer queue from a check: the Trade tab's button (its count) and the drawer are drawn
+   again. Never the whole tab: the member may be part way through building a trade. */
+function refreshTradeQueue() {
+  const old = document.getElementById("tq-open");
+  if (old && old.parentNode) {
+    const had = document.activeElement === old;
+    const fresh = tradeQueueButton();
+    if (fresh) { old.replaceWith(fresh); if (had) focusQuietly(fresh); }
+    else old.remove();
+  }
+  if (tqDrawer) paintTradeQueueDrawer();
+}
+
+/* ---------- Trade queue: commissioner overrides ----------
+   Cory, 2026-10-24: "need a way to have a code to cancel a trade or over ride it". With
+   the league's relay set up (site.json's submitUrl, cloudflare/worker.js), a card a
+   commissioner can act on carries a small Commissioner control: a live vote can be
+   approved, denied or cancelled, and an approved trade not yet made in Madden cancelled.
+   The commissioner code goes with the request to the relay, which signs it into the bot's
+   inbox without passing the code on, so only the bot can tell a right code from a wrong
+   one: an answer of { ok: true } only means the request reached the bot. So the card says
+   "Sent — checking…" and reads site.json again, every 10 seconds for two minutes and every
+   30 after that, until the trade's status moves or ten minutes have gone. A right code is
+   slow to show: the bot waits a minute to fold changes into one publish
+   (siteRepublish.ts), longer while a sync runs, and GitHub Pages takes a minute or two
+   more. So the timeout's words send the commissioner to the audit log before another
+   try, and only then suggest a wrong code: five wrong codes in an hour lock overrides
+   for an hour. A trade that leaves the queue altogether (an earlier season's approved trade,
+   cancelled) gets its word in the drawer's head, its card being gone. The code is typed,
+   sent and cleared: never stored, never in the address, never shown. In Discord,
+   /trade-admin does the same with no code (the commissioner role is the proof). */
+
+const TQ_POLL_MS = 10_000; // how often site.json is read again after a send...
+const TQ_POLL_FAST_FOR_MS = 120_000; // ...for the first two minutes,
+const TQ_POLL_SLOW_MS = 30_000; // ...then this often...
+const TQ_POLL_FOR_MS = 600_000; // ...until ten minutes after the send
+const TQ_PIN = /^\d{4,8}$/;
+const TQ_ACTIONS = {
+  approve: { button: "Approve", confirm: "Approve it" },
+  deny: { button: "Deny", confirm: "Deny it" },
+  cancel: { button: "Cancel trade", confirm: "Cancel it" },
+};
+const TQ_SENT_TEXT = "Sent — checking…";
+const TQ_STILL_TEXT = "Sent — still checking. The site updates a minute or two after the bot acts, sometimes longer.";
+const TQ_TIMEOUT_TEXT = "The site hasn't updated yet. Check the audit log in Discord before trying again. If nothing's there, the commissioner code may be wrong, or overrides are locked after 5 wrong tries in an hour (/trade-admin in Discord needs no code).";
+const TQ_BAD_PIN_TEXT = "Enter the commissioner code: 4 to 8 digits.";
+const TQ_OFFLINE_TEXT = "Couldn't reach the league server — check your connection and try again.";
+// Transient, like the builder's Submit: survives redraws, never a reload. By trade id:
+// { open: the control showing, confirm: the action waiting on its confirm step, outcome:
+// the last word, { state: "sending" | "checking" | "done" | "timeout" | "failed" | "invalid", message } }.
+const tqAdmin = new Map();
+let tqAdminInFlight = false; // one request at a time, from any card
+const tqWatch = new Map(); // trade id -> { was: its status when sent, pair: its teams in words, sentAt }
+let tqPollTimer = null;
+const tqGone = new Map(); // trade id -> the drawer head's word on a watched trade that left the queue
+
+function tqAdminState(id) {
+  let s = tqAdmin.get(id);
+  if (!s) { s = { open: false, confirm: null, outcome: null }; tqAdmin.set(id, s); }
+  return s;
+}
+
+/* What a commissioner can do to this trade from the site: only with the relay, only for a
+   trade the site can name, and only while it's live or approved and not yet made. */
+function tqActionsFor(t) {
+  if (!DATA.submitUrl || typeof t.id !== "string" || !/^[\w-]{1,64}$/.test(t.id)) return [];
+  if (t.status === "voting") return ["approve", "deny", "cancel"];
+  if (t.status === "approved") return ["cancel"];
+  return [];
+}
+
+/* "the trade between the Lions and the 49ers" */
+function tqPairText(t) {
+  return `the trade between the ${tradeQueueTeamName(t.teamA)} and the ${tradeQueueTeamName(t.teamB)}`;
+}
+
+/* The confirm step's question: the action and the two teams, and what it does. An approved
+   trade's cancel gives the trade back only when its charge is still in this season's counts
+   (trade.ts cancelApproved: not one approved before the counts last reset), and its card
+   stays on as Cancelled only while it's this season's: so the words promise neither. */
+function tqConfirmText(action, t) {
+  const pair = tqPairText(t);
+  if (action === "approve") return `Approve ${pair}? This decides the vote.`;
+  if (action === "deny") return `Deny ${pair}? This decides the vote.`;
+  if (t.status === "approved") return `Cancel ${pair}? It's called off before it's made in Madden, and each team gets the trade back if it still counts toward this season's limit.`;
+  return `Cancel ${pair}? The vote closes with no decision.`;
+}
+
+/* The word once a check sees the trade move: what it is now. */
+function tqOutcomeText(t) {
+  if (t.decidedBy === "commissioner" && t.status === "approved") return "Approved by commissioner";
+  if (t.decidedBy === "commissioner" && t.status === "denied") return "Denied by commissioner";
+  const s = tqStatus(t);
+  return s ? s.label : "Changed";
+}
+
+/* What a refused request says: the relay's own words (written for members) when it gave some. */
+function tqAdminError(out) {
+  const e = out && typeof out.error === "string" ? out.error.trim() : "";
+  return e || "Couldn't send that right now — try again in a minute.";
+}
+
+function tqKeyed(reg, node, key) {
+  node.dataset.tqKey = key;
+  reg.keyed.set(key, node);
+  return node;
+}
+
+/* Every drawn control painted again: a request starting or ending changes them all. */
+function tqPaintAdmin() {
+  if (tqDrawer && tqDrawer.reg) for (const c of tqDrawer.reg.controls) c.paint();
+}
+
+/* A card's Commissioner control, or just the last word on it once there's nothing left to
+   do (a trade just denied). null when there's neither. */
+function tqAdminControl(t, reg) {
+  const actions = tqActionsFor(t);
+  const known = tqAdmin.get(t.id);
+  // A confirm step for an action the trade no longer has (it moved under it) is dropped.
+  if (known && known.confirm && !actions.includes(known.confirm)) known.confirm = null;
+  if (!actions.length && !(DATA.submitUrl && known && known.outcome)) return null;
+  const wrap = el("div", "tq-admin");
+  const status = el("div", "tq-admin-status");
+  status.setAttribute("role", "status");
+  const control = { id: t.id, pin: null, paint: null };
+  const paintStatus = () => {
+    const o = tqAdmin.get(t.id)?.outcome;
+    status.textContent = o ? o.message : "";
+    status.className = "tq-admin-status" + (o ? " is-" + o.state : "");
+  };
+  if (!actions.length) {
+    control.paint = paintStatus;
+    reg.controls.push(control);
+    wrap.appendChild(status);
+    paintStatus();
+    return wrap;
+  }
+
+  const panelId = "tq-admin-" + t.id;
+  const toggle = tqKeyed(reg, el("button", "tq-admin-toggle", "Commissioner"), t.id + ":toggle");
+  toggle.type = "button";
+  toggle.setAttribute("aria-controls", panelId);
+  const panel = el("div", "tq-admin-panel");
+  panel.id = panelId;
+  const label = el("label", "tq-admin-label", "Commissioner code");
+  const pin = tqKeyed(reg, el("input", "tq-pin"), t.id + ":pin");
+  pin.id = "tq-pin-" + t.id;
+  label.setAttribute("for", pin.id);
+  pin.type = "password";
+  pin.setAttribute("inputmode", "numeric");
+  pin.setAttribute("autocomplete", "off");
+  pin.setAttribute("maxlength", "8");
+  pin.setAttribute("pattern", "[0-9]*");
+  pin.setAttribute("spellcheck", "false");
+  pin.setAttribute("aria-describedby", "tq-pin-help-" + t.id);
+  const help = el("div", "tq-admin-help", "Commissioners only. 4 to 8 digits; 5 wrong tries in an hour lock this for an hour.");
+  help.id = "tq-pin-help-" + t.id;
+  control.pin = pin;
+  panel.appendChild(label);
+  panel.appendChild(pin);
+  panel.appendChild(help);
+
+  const row = el("div", "tq-admin-actions");
+  const buttons = [];
+  for (const a of actions) {
+    const b = tqKeyed(reg, el("button", "tq-act tq-act-" + a, TQ_ACTIONS[a].button), t.id + ":" + a);
+    b.type = "button";
+    b.addEventListener("click", () => {
+      if (tqAdminInFlight) return;
+      const s = tqAdminState(t.id);
+      if (!TQ_PIN.test(pin.value)) {
+        s.outcome = { state: "invalid", message: TQ_BAD_PIN_TEXT };
+        paint();
+        focusQuietly(pin);
+        return;
+      }
+      s.confirm = a;
+      if (s.outcome && s.outcome.state === "invalid") s.outcome = null;
+      paint();
+      focusQuietly(yes);
+    });
+    buttons.push(b);
+    row.appendChild(b);
+  }
+  panel.appendChild(row);
+
+  const confirm = el("div", "tq-confirm");
+  const ask = el("div", "tq-confirm-ask");
+  const confirmRow = el("div", "tq-confirm-actions");
+  const yes = tqKeyed(reg, el("button", "tq-act tq-yes"), t.id + ":yes");
+  yes.type = "button";
+  const no = tqKeyed(reg, el("button", "tq-act tq-no", "Go back"), t.id + ":no");
+  no.type = "button";
+  confirmRow.appendChild(yes);
+  confirmRow.appendChild(no);
+  confirm.appendChild(ask);
+  confirm.appendChild(confirmRow);
+  panel.appendChild(confirm);
+
+  const paint = () => {
+    const s = tqAdmin.get(t.id) || { open: false, confirm: null };
+    toggle.setAttribute("aria-expanded", String(Boolean(s.open)));
+    panel.hidden = !s.open;
+    row.hidden = Boolean(s.confirm);
+    confirm.hidden = !s.confirm;
+    ask.textContent = s.confirm ? tqConfirmText(s.confirm, t) : "";
+    yes.textContent = s.confirm ? TQ_ACTIONS[s.confirm].confirm : "";
+    for (const b of buttons) b.disabled = tqAdminInFlight;
+    yes.disabled = tqAdminInFlight;
+    pin.disabled = tqAdminInFlight;
+    paintStatus();
+  };
+  control.paint = paint;
+  reg.controls.push(control);
+
+  toggle.addEventListener("click", () => {
+    const s = tqAdminState(t.id);
+    s.open = !s.open;
+    if (!s.open) { s.confirm = null; pin.value = ""; }
+    paint();
+    if (s.open) focusQuietly(pin);
+  });
+  no.addEventListener("click", () => {
+    const s = tqAdminState(t.id);
+    const was = s.confirm;
+    s.confirm = null;
+    paint();
+    focusQuietly(reg.keyed.get(t.id + ":" + was) || pin);
+  });
+  yes.addEventListener("click", () => {
+    const s = tqAdminState(t.id);
+    if (s.confirm) tqSend(t, s.confirm, pin, toggle);
+  });
+
+  wrap.appendChild(toggle);
+  wrap.appendChild(panel);
+  wrap.appendChild(status);
+  paint();
+  return wrap;
+}
+
+/* The request: exactly { action, trade, pin } to the relay. The field is cleared as it
+   goes, so the code lives on only in this one request. */
+async function tqSend(t, action, pin, toggle) {
+  if (tqAdminInFlight) return;
+  const s = tqAdminState(t.id);
+  const code = pin.value;
+  pin.value = "";
+  s.confirm = null;
+  if (!TQ_PIN.test(code)) {
+    s.outcome = { state: "invalid", message: TQ_BAD_PIN_TEXT };
+    tqPaintAdmin();
+    focusQuietly(pin);
+    return;
+  }
+  // The status it's sent from (the card is drawn again whenever a newer queue lands, so
+  // its trade is the page's now): a check waits for it to move.
+  const was = t.status;
+  tqAdminInFlight = true;
+  s.outcome = { state: "sending", message: "Sending…" };
+  tqPaintAdmin();
+  focusQuietly(toggle); // the confirm step it was sent from is gone
+  let outcome;
+  try {
+    const res = await fetch(DATA.submitUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, trade: t.id, pin: code }),
+    });
+    const out = await Promise.resolve().then(() => res.json()).catch(() => null); // an unreadable answer is a refusal without words
+    outcome = res.ok && out && out.ok === true
+      ? { state: "checking", message: TQ_SENT_TEXT }
+      : { state: "failed", message: tqAdminError(out) };
+  } catch {
+    outcome = { state: "failed", message: TQ_OFFLINE_TEXT };
+  }
+  tqAdminInFlight = false;
+  tqAdminState(t.id).outcome = outcome;
+  if (outcome.state === "checking") tqWatchTrade(t.id, was, tqPairText(t));
+  tqPaintAdmin();
+}
+
+/* A send to wait on: its first check 10 seconds from now, whatever the checks already
+   running were waiting on. */
+function tqWatchTrade(id, was, pair) {
+  tqWatch.set(id, { was, pair, sentAt: Date.now() });
+  if (tqPollTimer !== null) { clearTimeout(tqPollTimer); tqPollTimer = null; }
+  tqSchedulePoll();
+}
+
+/* The next check, unless one is already set (one that lands while a check is reading
+   site.json is kept, never doubled): in 10 seconds while any send is in its first two
+   minutes, else in 30. */
+function tqSchedulePoll() {
+  if (tqPollTimer !== null || !tqWatch.size) return;
+  const now = Date.now();
+  const fast = [...tqWatch.values()].some((w) => now - w.sentAt < TQ_POLL_FAST_FOR_MS);
+  tqPollTimer = setTimeout(tqPoll, fast ? TQ_POLL_MS : TQ_POLL_SLOW_MS);
+}
+
+/* One check: site.json read fresh (past every cache, the service worker's and the CDN's),
+   and each trade waited on either moved, left the queue, timed out, or waits on. A newer
+   queue replaces the page's and is drawn where it shows. */
+async function tqPoll() {
+  tqPollTimer = null;
+  let q = null;
+  try {
+    const res = await fetch("site.json?tq=" + Date.now(), { cache: "no-store" });
+    const fresh = res.ok ? await res.json() : null;
+    if (fresh && fresh.tradeQueue && Array.isArray(fresh.tradeQueue.trades)) q = fresh.tradeQueue;
+  } catch {}
+  const redraw = q !== null && DATA && JSON.stringify(q) !== JSON.stringify(DATA.tradeQueue);
+  if (redraw) DATA.tradeQueue = q;
+  const now = Date.now();
+  for (const [id, w] of [...tqWatch]) {
+    const t = q ? q.trades.find((x) => x && x.id === id) : null;
+    const s = tqAdminState(id);
+    const waited = now - w.sentAt;
+    if (t && t.status !== w.was) {
+      tqWatch.delete(id);
+      s.outcome = { state: "done", message: tqOutcomeText(t) };
+    } else if (q && !t) {
+      // Gone from a queue that was read (the site keeps an earlier season's trade only
+      // while it's approved): its card goes with the newer queue, so the drawer's head
+      // has the word, and the card, should it come back, none left over.
+      tqWatch.delete(id);
+      s.outcome = null;
+      const words = `${w.pair} is off the queue now.`;
+      tqGone.set(id, words.charAt(0).toUpperCase() + words.slice(1));
+    } else if (waited >= TQ_POLL_FOR_MS) {
+      tqWatch.delete(id);
+      s.outcome = { state: "timeout", message: TQ_TIMEOUT_TEXT };
+    } else if (waited >= TQ_POLL_FAST_FOR_MS && s.outcome && s.outcome.state === "checking") {
+      s.outcome = { state: "checking", message: TQ_STILL_TEXT };
+    }
+  }
+  tqSchedulePoll();
+  if (redraw) refreshTradeQueue();
+  else tqPaintAdmin();
 }
 
 /* ---------- Trade builder ----------
@@ -1813,6 +2384,26 @@ function tradeLoadState() {
   } catch {}
 }
 tradeLoadState();
+
+/* A saved draft can name a team this league doesn't list (one left from other data, say):
+   its side drew as "Unknown" with its picks still on it, and the team chooser offered
+   "Unknown" as a side. That side starts over once site.json says which teams exist. */
+function tradeDropUnknownTeams(index) {
+  let changed = false;
+  for (const side of ["a", "b"]) {
+    if (TRADE[side] != null && !index.has(TRADE[side])) {
+      TRADE[side] = null;
+      TRADE[side + "Players"] = [];
+      TRADE[side + "Picks"] = [];
+      changed = true;
+    }
+  }
+  if (changed) {
+    TRADE.code = null;
+    tradeSaveState();
+  }
+  return changed;
+}
 
 function base64url(str) {
   return btoa(String.fromCharCode(...new TextEncoder().encode(str)))
@@ -2008,7 +2599,8 @@ function renderTradeSide(container, sideKey) {
 }
 
 function renderTrade(view) {
-  renderTradeQueue(view);
+  const queue = tradeQueueButton(); // the Trade Queue's drawer opens from the top of the tab
+  if (queue) view.appendChild(queue);
   if (!DATA.rosters) {
     view.appendChild(el("div", "empty", "Trade data isn't in this site version yet — it appears after the next league sync."));
     return;
@@ -4423,8 +5015,9 @@ let viewRuleId = null; // a #rules-<id> link's section, scrolled to once the Rul
 let tabBeforeRules = "home"; // the tab showing before the Rules tab took over, for Back off a #rules link
 let viewHelpId = null; // a #help-<id> link's item, opened and scrolled to once the Help tab is drawn
 let tabBeforeHelp = "home"; // the tab showing before the Help tab took over, for Back off a #help link
-let viewTradeQueue = false; // a #trade-queue link: the queue scrolled to once the Trade tab is drawn
+let viewTradeQueue = false; // the Trade tab's Trade Queue drawer is open (#trade-queue); kept under a team / game page or Draft HQ over the tab
 let tabBeforeTradeQueue = null; // the tab a #trade-queue link took the Trade tab over from, for Back off it; null while the Trade tab is the member's own pick
+let routedYet = false; // the first route (the address the page loaded on) is behind us
 const teamSort = { col: "ovr", dir: -1 }; // roster table sort state, survives re-renders
 const needsView = { sort: "need", open: null }; // draft board: sort mode + which group is expanded
 let scoreWeek = null; // "stage-week" key of a past week being browsed on Home, null = current week
@@ -4471,7 +5064,7 @@ function closeGame(viaHistory) {
 /* The page a URL fragment names: #team-<id>, #game-<scheduleId> (the link the Discord
    matchup breakdown posts), or #draft; or the tab, #rules / #rules-<id> (the links bot
    posts put where arguments start), #help / #help-<id> (the how-to) or #trade-queue (the
-   Trade tab at its queue). Read on load and on every back / forward. */
+   Trade tab with its Trade Queue drawer open). Read on load and on every back / forward. */
 function routeFromHash() {
   const hash = location.hash || "";
   const team = hash.match(/^#team-(\d+)$/);
@@ -4482,9 +5075,14 @@ function routeFromHash() {
   const rules = rulesRoute(hash);
   const help = helpRoute(hash);
   const queue = hash === "#trade-queue";
+  const loading = !routedYet;
+  routedYet = true;
   viewRuleId = null;
   viewHelpId = null;
-  viewTradeQueue = false;
+  // The drawer is the Trade tab's: a page over the tab keeps it for when the page closes
+  // (a team page opened from a player in it); any other address closes it, and
+  // #trade-queue opens it again below.
+  if (!team && !game && !viewDraftHq) viewTradeQueue = false;
   if (rules) {
     // A league without rules has no Rules tab: its link opens Home.
     if (!hasRules()) { activeTab = "home"; return; }
@@ -4500,7 +5098,7 @@ function routeFromHash() {
     activeTab = "help";
     viewHelpId = help.section;
   } else if (queue) {
-    // The Trade tab, at the queue. Taken over from the Rules or Help tab, the tab before is
+    // The Trade tab, its drawer open. Taken over from the Rules or Help tab, the tab before is
     // the one under that, so Back to the bare address lands where the member was before any
     // link. When that is the Trade tab itself (Trade tapped, then a Rules link), Trade is
     // still the member's own pick: null, as for the link followed from Trade.
@@ -4510,6 +5108,11 @@ function routeFromHash() {
     }
     activeTab = "trade";
     viewTradeQueue = true;
+    // How this entry opened the drawer, kept once written: closing it goes Back only where
+    // Back is this site's (closeTradeQueue).
+    if (!tradeQueueEntryKind()) {
+      try { history.replaceState({ tradeQueue: loading ? "loaded" : "followed" }, "", location.pathname + location.search + hash); } catch {}
+    }
   } else if (activeTab === "rules" && !team && !game && !viewDraftHq) {
     // Back off a #rules link onto the bare address: the tab that was showing before it.
     activeTab = tabBeforeRules;
@@ -4548,11 +5151,11 @@ function followLink(hash) {
 }
 
 /* The address a tab lives at: #rules for the Rules tab and #help for the Help tab, so
-   their links can be shared and a reload stays on them; #trade-queue for a Trade tab a
-   #trade-queue link opened, so closing a page over it keeps the link's address; the bare
-   page for every other tab, as it always was. */
+   their links can be shared and a reload stays on them; #trade-queue for the Trade tab with
+   its drawer open, so closing a page over it opens the drawer again; the bare page for every
+   other tab, as it always was. */
 function tabUrl(name) {
-  return location.pathname + location.search + (name === "rules" ? "#rules" : name === "help" ? "#help" : name === "trade" && tabBeforeTradeQueue !== null ? "#trade-queue" : "");
+  return location.pathname + location.search + (name === "rules" ? "#rules" : name === "help" ? "#help" : name === "trade" && viewTradeQueue ? "#trade-queue" : "");
 }
 
 /* Which page is showing: a tab's name, or "team-<id>" / "game-<id>" / "draft-hq". */
@@ -4561,6 +5164,12 @@ function currentViewKey() {
 }
 
 function render() {
+  renderView();
+  // The Trade Queue drawer, over the page and outside #view, then follows the route: shown,
+  // drawn again or taken down, whichever page was drawn.
+  syncTradeQueueDrawer();
+}
+function renderView() {
   const view = document.getElementById("view");
   // keepScroll must compare against the CURRENT view's key, not the tab name —
   // a team page's key is "team-<id>" while activeTab stays "teams", so comparing
@@ -4579,11 +5188,9 @@ function render() {
   // Re-rendering the SAME view (the trade builder does this on every tap) keeps the
   // scroll position; switching views starts at the top like a page change should.
   window.scrollTo(0, keepScroll ? y : 0);
-  // A #rules-<id> link then lands on its section, a #help-<id> link on its item, a
-  // #trade-queue link on the queue.
+  // A #rules-<id> link then lands on its section, a #help-<id> link on its item.
   if (activeTab === "rules") revealRuleSection();
   if (activeTab === "help") revealHelpSection();
-  if (activeTab === "trade") revealTradeQueue();
 }
 
 /* Switching tabs, from the tab bar or from a link inside a page (the home wire's "All
@@ -4598,11 +5205,11 @@ function showTab(name) {
   viewDraftHq = false;
   viewRuleId = null; // a section link not drawn yet is dropped, never kept for a later visit
   viewHelpId = null; // and so is a Help item's
-  viewTradeQueue = false; // and so is a queue link's scroll
-  // A tapped tab is the member's own pick, not a link's. Trade tapped on a Trade tab a
-  // #trade-queue link opened stays that link, the way Rules tapped again stays #rules.
+  viewTradeQueue = false; // a tab tapped closes the Trade Queue drawer (from a page over it: the drawer covers the bar)
+  // A tapped tab is the member's own pick, not a link's, Trade too: its own address is the
+  // bare page, and a #trade-queue link's hold on it lasts only as long as the link's drawer.
   const under = tabUnderLinks(); // read before the queue's hold is let go below
-  if (!(name === "trade" && fromTab === "trade")) tabBeforeTradeQueue = null;
+  tabBeforeTradeQueue = null;
   try { history.replaceState(null, "", tabUrl(name)); } catch {}
   if (name === "rules") tabBeforeRules = under; // Rules tapped again: the one under it stays
   if (name === "help") tabBeforeHelp = under;
@@ -4783,7 +5390,11 @@ function fxTabDirection(fromTab, toTab) {
    showing, to: () => parts in the page just rendered }. Without the API, with reduced
    motion or before the data loads: update() runs at once, exactly as before. */
 function fxGo(nav, update, morph) {
-  if (!fxCanTransition()) { update(); return null; }
+  // The Trade Queue drawer up now, or on the route being drawn: no page transition. Named,
+  // the bars are drawn over the page's snapshot, the drawer and its overlay part of it, so
+  // for the length of one they'd sit on the drawer (its X, on a phone); the drawer's own
+  // slide is the change to see. (The route has moved by now; the drawer comes down in update.)
+  if (!fxCanTransition() || tqDrawer || tradeQueueDrawerDue()) { update(); return null; }
   const gen = ++fxGen;
   const root = document.documentElement;
   const mark = (on) => {
@@ -5039,6 +5650,7 @@ async function load() {
   }
   teamIndex.clear();
   for (const t of DATA.teams || []) teamIndex.set(t.teamId, t);
+  tradeDropUnknownTeams(teamIndex);
   applyBranding(DATA.leagueName);
   try { mountCrest(document, typeof Image === "function" ? Image : null, "logo/crest-120.png"); } catch {}
   document.getElementById("week-chip").textContent = DATA.weekLabel || "—";

@@ -30,7 +30,9 @@ self.addEventListener("fetch", (event) => {
   // included, would sit in the cache for good, and the only thing an offline copy could
   // do is show an old sync's list beside newer totals. The tabs say "couldn't load"
   // offline instead (2026-10-16).
-  const keep = !/\/(?:updates|transactions)\/[^/]+\.json$/.test(url.pathname);
+  // Nor is a cache-busted read of site.json (the Trade Queue's checks after a commissioner
+  // override, site.json?tq=<time>): one cache entry per check would pile up for good.
+  const keep = !/\/(?:updates|transactions)\/[^/]+\.json$/.test(url.pathname) && !(url.search && /\/site\.json$/.test(url.pathname));
 
   event.respondWith(
     fetch(new Request(event.request, { cache: "no-cache" }))

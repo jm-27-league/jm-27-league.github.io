@@ -1515,11 +1515,99 @@ a.card:active { background: var(--surface-2); }
   .tx-sides { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 }
 
-/* ---------- Trade queue (the top of the Trade tab, #trade-queue) ----------
-   One card per trade sent to the committee: a status pill, when, then each team and what
-   it receives, drawn as the Transactions tab's trade blocks so a trade reads the same in
-   both. Nothing moves: a #trade-queue link only scrolls. */
-.tq { scroll-margin-top: calc(74px + env(safe-area-inset-top)); }
+/* ---------- Trade queue (a drawer over the Trade tab, #trade-queue) ----------
+   The tab's top holds only the way in: a "Trade Queue" button with what's open and a red
+   count. The queue itself is a drawer from the right, over an overlay, the full width on
+   a phone of 480px or less: one card per trade sent to the committee, a status pill, when,
+   then each team and what it receives, drawn as the Transactions tab's trade blocks so a
+   trade reads the same in both. The drawer slides in and out only for a member who hasn't
+   asked for less motion; with reduced motion it just appears and goes. */
+.tq-open {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0;
+  margin: 4px 0 2px; padding: 12px 14px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--edge); border-left: 3px solid var(--red); border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(16,21,27,.06);
+  font-family: inherit; text-align: left; cursor: pointer;
+}
+.tq-open-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tq-open-title {
+  font-family: "Archivo", sans-serif; font-size: 13px; font-weight: 800; font-stretch: 80%;
+  letter-spacing: .16em; text-transform: uppercase;
+}
+.tq-open-sub { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+.tq-badge {
+  flex: none; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--red); color: #fff;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-size: 12px; font-variant-numeric: tabular-nums;
+}
+/* A chevron: it opens to the side. */
+.tq-open::after {
+  content: ""; flex: none; width: 8px; height: 8px; margin-right: 2px;
+  border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint);
+  transform: rotate(-45deg);
+}
+.tq-open:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+@media (hover: hover) { .tq-open:hover { background: var(--surface-2); } } /* a tap on a phone would leave it grey */
+
+/* The page under the drawer holds still. A class, not the player card's inline style, so a
+   player card opened from the drawer and closed again can't let the page go. */
+body.tq-locked { overflow: hidden; }
+.tq-ov {
+  position: fixed; inset: 0; z-index: 50; /* over the bars; a player card (60) over it */
+  background: rgba(10, 12, 16, .55);
+  display: flex; justify-content: flex-end;
+}
+.tq-ov.tq-leaving { pointer-events: none; }
+.tq-drawer {
+  display: flex; flex-direction: column;
+  width: 440px; max-width: 100%; height: 100%;
+  background: var(--bg);
+  box-shadow: -8px 0 40px rgba(16, 21, 27, .35);
+  outline: none;
+}
+.tq-drawer-head {
+  flex: none; display: flex; align-items: flex-start; gap: 12px;
+  padding: calc(14px + env(safe-area-inset-top)) 14px 12px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--edge);
+}
+.tq-drawer-titles { flex: 1; min-width: 0; }
+.tq-drawer-title {
+  font-family: "Archivo", sans-serif; font-size: 14px; font-weight: 800; font-stretch: 80%;
+  letter-spacing: .16em; text-transform: uppercase;
+  border-left: 3px solid var(--red); padding-left: 8px;
+}
+.tq-drawer-sub { margin-top: 4px; padding-left: 11px; font-size: 11.5px; color: var(--text-faint); }
+.tq-drawer-sub:empty { display: none; }
+/* A trade that left the queue after a send. Never display: none, so the live status it is
+   stays heard when its first words arrive. */
+.tq-drawer-note { padding-left: 11px; font-size: 12px; line-height: 1.45; font-weight: 700; color: var(--up); overflow-wrap: anywhere; }
+.tq-drawer-note:not(:empty) { margin-top: 6px; }
+.tq-close {
+  flex: none; width: 34px; height: 34px; line-height: 1;
+  background: var(--surface-2); border: 1px solid var(--edge); border-radius: 50%;
+  color: var(--text-dim); font-size: 13px; cursor: pointer;
+}
+.tq-close:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+.tq-drawer-body {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 12px calc(20px + env(safe-area-inset-bottom));
+}
+@media (max-width: 480px) {
+  .tq-drawer { width: 100%; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tq-ov { animation: tq-fade-in .2s ease-out; }
+  .tq-drawer { animation: tq-slide-in .26s cubic-bezier(.2, .8, .2, 1); }
+  .tq-ov.tq-leaving { animation: tq-fade-out .18s ease-in forwards; }
+  .tq-ov.tq-leaving .tq-drawer { animation: tq-slide-out .18s ease-in forwards; }
+}
+@keyframes tq-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tq-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes tq-slide-in { from { transform: translateX(100%); } to { transform: none; } }
+@keyframes tq-slide-out { from { transform: none; } to { transform: translateX(100%); } }
+
 .tq-card { padding: 10px 14px 12px; }
 .tq-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 8px; }
 .tq-pill {
@@ -1529,15 +1617,62 @@ a.card:active { background: var(--surface-2); }
   padding: 3px 9px; border-radius: 999px;
   background: var(--surface-2); color: var(--text-dim);
 }
-/* A live vote in the trade gold; approved in red, since it still needs a commissioner in Madden. */
+/* A live vote in the trade gold; approved in red, since it still needs a commissioner in
+   Madden. Cancelled, and a status this page doesn't know yet, stay the plain grey. */
 .tq-voting .tq-pill { color: var(--gold); background: rgba(184,134,11,.13); }
 .tq-approved .tq-pill { color: var(--red); background: rgba(208,10,16,.08); }
 .tq-done .tq-pill { color: var(--up); background: rgba(18,138,77,.12); }
 .tq-denied .tq-pill { color: var(--down); background: rgba(201,58,42,.1); }
+.tq-cancelled .tq-pill { color: var(--text-dim); background: var(--surface-2); }
 .tq-pick { padding: 5px 10px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.tq-more { margin-top: 4px; }
+
+/* A card's Commissioner control: a small disclosure under the sides. The author display
+   values below beat the browser's own [hidden] rule, so each part says it again. */
+.tq-admin { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--edge); }
+.tq-admin-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: none; border: 0; padding: 4px 0; cursor: pointer;
+  font-family: "Archivo", sans-serif; font-weight: 800; font-size: 11.5px; letter-spacing: .04em;
+  color: var(--text-dim);
+}
+.tq-admin-toggle::after {
+  content: ""; width: 6px; height: 6px; margin-top: -3px;
+  border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint);
+  transform: rotate(45deg);
+}
+.tq-admin-toggle[aria-expanded="true"]::after { margin-top: 3px; transform: rotate(-135deg); }
+.tq-admin-toggle:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+.tq-admin-panel { display: grid; gap: 7px; margin-top: 6px; }
+.tq-admin-panel[hidden], .tq-admin-actions[hidden], .tq-confirm[hidden] { display: none; }
+.tq-admin-label { font-size: 12px; font-weight: 700; color: var(--text-dim); }
+/* 16px so iOS doesn't zoom the page on focus. */
+.tq-pin {
+  width: 100%; max-width: 200px; padding: 9px 12px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--edge); border-radius: 8px;
+  font-family: inherit; font-size: 16px; letter-spacing: .2em;
+}
+.tq-pin:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 1px; }
+.tq-admin-help { font-size: 11.5px; line-height: 1.45; color: var(--text-faint); }
+.tq-admin-actions, .tq-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tq-act {
+  padding: 8px 13px; border-radius: 8px; cursor: pointer;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--edge);
+  font-family: "Archivo", sans-serif; font-weight: 800; font-size: 12.5px;
+}
+.tq-act-approve { color: var(--up); border-color: rgba(18,138,77,.35); }
+.tq-act-deny, .tq-act-cancel { color: var(--down); border-color: rgba(201,58,42,.35); }
+.tq-act.tq-yes { background: var(--red); color: #fff; border-color: var(--red); }
+.tq-act:disabled { opacity: .5; cursor: default; }
+.tq-act:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 2px; }
+.tq-confirm { padding: 10px 12px; background: #fff8f8; border: 1px solid rgba(208,10,16,.25); border-radius: 8px; }
+.tq-confirm-ask { font-size: 13px; line-height: 1.45; margin-bottom: 8px; overflow-wrap: anywhere; }
+.tq-admin-status { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text-dim); overflow-wrap: anywhere; }
+.tq-admin-status:empty { display: none; }
+.tq-admin-status.is-done { color: var(--up); font-weight: 700; }
+.tq-admin-status.is-failed, .tq-admin-status.is-timeout, .tq-admin-status.is-invalid { color: var(--down); }
 @media (min-width: 900px) {
-  .tq { scroll-margin-top: 128px; }
-  .tq-list { grid-template-columns: 1fr 1fr; gap: 12px; }
   .tq-card { padding: 12px 18px 14px; }
 }
 
